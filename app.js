@@ -1,0 +1,920 @@
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+const SUPABASE_URL = 'https://ygqfhuuomdunetpvwhrj.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlncWZodXVvbWR1bmV0cHZ3aHJqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNDY5NjgsImV4cCI6MjA5NTgyMjk2OH0.X-yHD2uC1ua1troWyNEOmUobFVyhbbXyNmL_oBhL1A0';
+const START_DATE = localStorage.getItem('startDate') || '2026-05-31';
+
+// ─── SUPABASE CLIENT ───────────────────────────────────────────────────────────
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ─── STATE ─────────────────────────────────────────────────────────────────────
+let habits = [];
+let todayChecks = {}; // habitId -> boolean
+let ratings = { skin: 0, energy: 0, hip: 0, knee: 0, back: 0, weed: null, notes: '', sleep: '' };
+let gymState = {}; // exerciseName -> {done, weight}
+let progressData = {};
+
+// ─── GYM PLAN ─────────────────────────────────────────────────────────────────
+const GYM_PLAN = {
+  1: { name: 'Day A — Lower Posture', exercises: [
+    { name: 'Glute bridges', sets: 3, reps: 12 },
+    { name: 'Banded clamshells', sets: 3, reps: 10 },
+    { name: 'Cable hip abduction', sets: 3, reps: 12 },
+    { name: 'Single leg RDL', sets: 3, reps: 10 },
+    { name: 'Leg press', sets: 3, reps: 12 },
+    { name: 'Seated leg curl', sets: 3, reps: 12 },
+  ]},
+  2: { name: 'Day B — Upper Push', exercises: [
+    { name: 'Incline DB press', sets: 3, reps: 12 },
+    { name: 'Cable fly', sets: 3, reps: 12 },
+    { name: 'DB shoulder press', sets: 3, reps: 12 },
+    { name: 'Lateral raises', sets: 3, reps: 15 },
+    { name: 'Tricep pushdown', sets: 3, reps: 12 },
+    { name: 'Wall angels', sets: 3, reps: 10 },
+  ]},
+  4: { name: 'Day C — Lower Strength', exercises: [
+    { name: 'Goblet squat', sets: 3, reps: 12 },
+    { name: 'Walking lunges', sets: 3, reps: 10 },
+    { name: 'Hip thrust', sets: 3, reps: 12 },
+    { name: 'Leg extension', sets: 3, reps: 15 },
+    { name: 'Calf raise', sets: 3, reps: 15 },
+    { name: 'Dead bug', sets: 3, reps: 10 },
+  ]},
+  5: { name: 'Day D — Upper Pull', exercises: [
+    { name: 'Cable row', sets: 3, reps: 12 },
+    { name: 'Lat pulldown', sets: 3, reps: 12 },
+    { name: 'Single arm row', sets: 3, reps: 12 },
+    { name: 'Face pulls', sets: 3, reps: 15 },
+    { name: 'Bicep curl', sets: 3, reps: 12 },
+    { name: 'Rear delt fly', sets: 3, reps: 12 },
+  ]},
+};
+
+const BLOCK_META = {
+  morning: { icon: '🌅', label: 'Morning', time: '7am', freq: 'daily' },
+  midday:  { icon: '☀️', label: 'Midday',  time: '12:30pm', freq: 'weekdays' },
+  physio:  { icon: '💪', label: 'Physio',  time: 'any time', freq: '3–5×/week' },
+  evening: { icon: '🌙', label: 'Evening', time: '7:30pm', freq: 'daily' },
+  bedtime: { icon: '🛌', label: 'Bedtime', time: '10pm',   freq: 'daily' },
+};
+
+const BLOCK_ORDER = ['morning','midday','physio','evening','bedtime'];
+
+// ─── UTILS ─────────────────────────────────────────────────────────────────────
+function today() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function dayNumber() {
+  const start = new Date(START_DATE);
+  const now = new Date();
+  return Math.max(1, Math.floor((now - start) / 86400000) + 1);
+}
+
+function dayOfWeek() { return new Date().getDay(); } // 0=Sun
+
+function isGymDay() { return dayOfWeek() in GYM_PLAN; }
+
+function todayGym() { return GYM_PLAN[dayOfWeek()] || null; }
+
+async function api(table, method = 'GET', body = null, params = '') {
+  const url = `${SUPABASE_URL}/rest/v1/${table}${params}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': method === 'POST' ? 'return=representation' : '',
+    },
+    body: body ? JSON.stringify(body) : null,
+  });
+  if (!res.ok && res.status !== 204) {
+    const err = await res.text();
+    throw new Error(err);
+  }
+  if (res.status === 204) return null;
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function checkSVG() {
+  return `<svg viewBox="0 0 14 14"><polyline points="2,7 6,11 12,3"/></svg>`;
+}
+
+// ─── INIT ──────────────────────────────────────────────────────────────────────
+async function init() {
+  registerSW();
+  await loadHabits();
+  await loadTodayLogs();
+  renderToday();
+  setupNav();
+  document.getElementById('log-btn').addEventListener('click', saveDay);
+}
+
+function registerSW() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+  }
+}
+
+// ─── DATA LOADING ──────────────────────────────────────────────────────────────
+async function loadHabits() {
+  try {
+    habits = await api('habits', 'GET', null, '?order=item_order') || [];
+  } catch (e) {
+    habits = [];
+  }
+}
+
+async function loadTodayLogs() {
+  try {
+    const logs = await api('daily_logs', 'GET', null,
+      `?log_date=eq.${today()}&select=habit_id,checked,value`) || [];
+    todayChecks = {};
+    logs.forEach(l => { todayChecks[l.habit_id] = l.checked; });
+
+    const r = await api('daily_ratings', 'GET', null,
+      `?log_date=eq.${today()}&limit=1`) || [];
+    if (r[0]) {
+      const d = r[0];
+      ratings = {
+        skin: d.skin_score || 0, energy: d.energy_score || 0,
+        hip: d.pain_hip || 0, knee: d.pain_knee || 0, back: d.pain_back || 0,
+        weed: d.weed_used, notes: d.notes || '', sleep: d.sleep_time || '',
+      };
+    }
+  } catch (e) {}
+}
+
+// ─── TODAY SCREEN ──────────────────────────────────────────────────────────────
+function renderToday() {
+  const container = document.getElementById('today-blocks');
+  container.innerHTML = '';
+
+  const now = new Date();
+  const hour = now.getHours() + now.getMinutes() / 60;
+  const currentBlock = getCurrentBlock(hour);
+
+  BLOCK_ORDER.forEach(blockId => {
+    const meta = BLOCK_META[blockId];
+    const blockHabits = habits.filter(h => h.block === blockId);
+
+    const checkedCount = blockHabits.filter(h => todayChecks[h.id]).length;
+    const isOpen = blockId === currentBlock;
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="block-header" data-block="${blockId}">
+        <div class="block-title">
+          <span>${meta.icon}</span>
+          <span>${meta.label}</span>
+          <span style="font-size:12px;color:var(--muted);font-family:sans-serif">${meta.time}</span>
+        </div>
+        <div class="block-meta">
+          ${checkedCount > 0 ? `<span class="block-count">${checkedCount}/${blockHabits.length}</span>` : ''}
+          <svg class="block-chevron ${isOpen ? 'open' : ''}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="5,8 10,13 15,8"/></svg>
+        </div>
+      </div>
+      <div class="block-items ${isOpen ? '' : 'collapsed'}" id="block-${blockId}">
+        ${blockHabits.map(h => renderHabitItem(h)).join('')}
+        ${blockId === 'bedtime' ? renderBedtimeExtras() : ''}
+      </div>
+    `;
+
+    card.querySelector('.block-header').addEventListener('click', () => toggleBlock(blockId));
+    container.appendChild(card);
+
+    blockHabits.forEach(h => {
+      const el = document.getElementById(`check-${h.id}`);
+      if (el) el.addEventListener('click', () => toggleHabit(h.id));
+    });
+  });
+
+  updateHeaderProgress();
+  attachBedtimeListeners();
+}
+
+function getCurrentBlock(hour) {
+  if (hour < 11) return 'morning';
+  if (hour < 15) return 'midday';
+  if (hour < 19.5) return 'physio';
+  if (hour < 22) return 'evening';
+  return 'bedtime';
+}
+
+function renderHabitItem(h) {
+  const checked = !!todayChecks[h.id];
+  const badge = h.status === 'buy' ? '<span class="status-badge badge-buy">BUY</span>'
+    : h.status === 'rx' ? '<span class="status-badge badge-rx">RX</span>'
+    : h.status === 'paused' ? '<span class="status-badge badge-paused">PAUSED</span>' : '';
+  return `
+    <div class="habit-item ${checked ? 'checked' : ''}">
+      <div class="habit-check ${checked ? 'checked' : ''}" id="check-${h.id}">${checkSVG()}</div>
+      <div class="habit-text">
+        <div class="habit-label">${h.label}</div>
+        ${h.sub ? `<div class="habit-sub">${h.sub}</div>` : ''}
+      </div>
+      ${badge}
+    </div>`;
+}
+
+function renderBedtimeExtras() {
+  const r = ratings;
+  return `
+    <div style="padding: 4px 0">
+      ${ratingRowHTML('Skin', 'skin', r.skin, '✨')}
+      ${ratingRowHTML('Energy', 'energy', r.energy, '⚡')}
+      ${ratingRowHTML('Hip pain', 'hip', r.hip, '🦴')}
+      ${ratingRowHTML('Knee pain', 'knee', r.knee, '🦴')}
+      ${ratingRowHTML('Back pain', 'back', r.back, '🦴')}
+      <div class="rating-row">
+        <div class="rating-label">Sleep time</div>
+        <input type="time" class="sleep-input" id="sleep-input" value="${r.sleep}">
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Weed</div>
+        <div class="toggle-btn">
+          <button class="toggle-opt ${r.weed === true ? 'active' : ''}" id="weed-yes">Yes</button>
+          <button class="toggle-opt ${r.weed === false ? 'active' : ''}" id="weed-no">No</button>
+        </div>
+      </div>
+      <textarea class="notes-input" id="notes-input" placeholder="Notes…">${r.notes}</textarea>
+    </div>`;
+}
+
+function ratingRowHTML(label, key, val, icon) {
+  return `
+    <div class="rating-row">
+      <div class="rating-label">${label}</div>
+      <div class="stars" id="stars-${key}">
+        ${[1,2,3,4,5].map(i =>
+          `<button class="star ${val >= i ? 'active' : ''}" data-key="${key}" data-val="${i}">${icon}</button>`
+        ).join('')}
+      </div>
+    </div>`;
+}
+
+function attachBedtimeListeners() {
+  document.querySelectorAll('.star').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.key;
+      const val = parseInt(btn.dataset.val);
+      ratings[key] = val;
+      document.querySelectorAll(`.star[data-key="${key}"]`).forEach((s, i) => {
+        s.classList.toggle('active', i < val);
+      });
+    });
+  });
+
+  const sleepInput = document.getElementById('sleep-input');
+  if (sleepInput) sleepInput.addEventListener('change', e => { ratings.sleep = e.target.value; });
+
+  const weedYes = document.getElementById('weed-yes');
+  const weedNo = document.getElementById('weed-no');
+  if (weedYes) weedYes.addEventListener('click', () => {
+    ratings.weed = true;
+    weedYes.classList.add('active'); weedNo.classList.remove('active');
+  });
+  if (weedNo) weedNo.addEventListener('click', () => {
+    ratings.weed = false;
+    weedNo.classList.add('active'); weedYes.classList.remove('active');
+  });
+
+  const notesInput = document.getElementById('notes-input');
+  if (notesInput) notesInput.addEventListener('input', e => { ratings.notes = e.target.value; });
+}
+
+function toggleBlock(blockId) {
+  const items = document.getElementById(`block-${blockId}`);
+  const chevron = document.querySelector(`[data-block="${blockId}"] .block-chevron`);
+  const isOpen = !items.classList.contains('collapsed');
+  items.classList.toggle('collapsed', isOpen);
+  chevron.classList.toggle('open', !isOpen);
+}
+
+function toggleHabit(id) {
+  todayChecks[id] = !todayChecks[id];
+  const check = document.getElementById(`check-${id}`);
+  const item = check.closest('.habit-item');
+  check.classList.toggle('checked', todayChecks[id]);
+  item.classList.toggle('checked', todayChecks[id]);
+  updateHeaderProgress();
+  updateBlockCount(habits.find(h => h.id === id)?.block);
+}
+
+function updateBlockCount(blockId) {
+  if (!blockId) return;
+  const blockHabits = habits.filter(h => h.block === blockId);
+  const checked = blockHabits.filter(h => todayChecks[h.id]).length;
+  const header = document.querySelector(`[data-block="${blockId}"] .block-meta`);
+  if (!header) return;
+  let badge = header.querySelector('.block-count');
+  if (checked > 0) {
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'block-count';
+      header.insertBefore(badge, header.firstChild);
+    }
+    badge.textContent = `${checked}/${blockHabits.length}`;
+  } else if (badge) {
+    badge.remove();
+  }
+}
+
+function updateHeaderProgress() {
+  const total = habits.length;
+  const checked = Object.values(todayChecks).filter(Boolean).length;
+  const pct = total > 0 ? Math.round((checked / total) * 100) : 0;
+  document.querySelector('.progress-fill').style.width = pct + '%';
+}
+
+// ─── SAVE DAY ──────────────────────────────────────────────────────────────────
+async function saveDay() {
+  const btn = document.getElementById('log-btn');
+  btn.textContent = 'Saving…';
+
+  try {
+    // Upsert all habit checks
+    const logDate = today();
+    for (const h of habits) {
+      const checked = !!todayChecks[h.id];
+      // Check if log exists
+      const existing = await api('daily_logs', 'GET', null,
+        `?log_date=eq.${logDate}&habit_id=eq.${h.id}&limit=1`);
+      if (existing && existing.length > 0) {
+        await api('daily_logs', 'PATCH', { checked },
+          `?log_date=eq.${logDate}&habit_id=eq.${h.id}`);
+      } else {
+        await api('daily_logs', 'POST', { log_date: logDate, habit_id: h.id, checked });
+      }
+    }
+
+    // Upsert ratings
+    const ratingPayload = {
+      log_date: logDate,
+      skin_score: ratings.skin || null,
+      energy_score: ratings.energy || null,
+      pain_hip: ratings.hip || null,
+      pain_knee: ratings.knee || null,
+      pain_back: ratings.back || null,
+      weed_used: ratings.weed,
+      notes: ratings.notes || null,
+      sleep_time: ratings.sleep || null,
+    };
+
+    const existingRating = await api('daily_ratings', 'GET', null,
+      `?log_date=eq.${logDate}&limit=1`);
+    if (existingRating && existingRating.length > 0) {
+      await api('daily_ratings', 'PATCH', ratingPayload, `?log_date=eq.${logDate}`);
+    } else {
+      await api('daily_ratings', 'POST', ratingPayload);
+    }
+
+    btn.textContent = 'Day Logged ✓';
+    btn.classList.add('saved');
+    showToast('Day logged successfully');
+    setTimeout(() => { btn.textContent = 'Log Day'; btn.classList.remove('saved'); }, 2500);
+  } catch (e) {
+    btn.textContent = 'Log Day';
+    showToast('Error saving — check connection');
+  }
+}
+
+// ─── GYM SCREEN ───────────────────────────────────────────────────────────────
+async function renderGym() {
+  const container = document.getElementById('gym-content');
+  const gymDay = todayGym();
+
+  if (!gymDay) {
+    const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek()];
+    container.innerHTML = `
+      <div class="rest-day">
+        <div class="rest-icon">🛋️</div>
+        <p>Rest day — ${dow}</p>
+        <small>Next gym day: ${getNextGymDay()}</small>
+      </div>`;
+  } else {
+    await renderWorkout(gymDay, container);
+  }
+
+  await renderGymHistory();
+}
+
+function getNextGymDay() {
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const gymDays = Object.keys(GYM_PLAN).map(Number);
+  let d = dayOfWeek();
+  for (let i = 1; i <= 7; i++) {
+    d = (d + 1) % 7;
+    if (gymDays.includes(d)) return days[d];
+  }
+}
+
+async function renderWorkout(gymDay, container) {
+  // Load today's saved weights + last session weights for each exercise (progressive overload hint)
+  const [saved, prevLogs] = await Promise.all([
+    api('gym_logs', 'GET', null,
+      `?log_date=eq.${today()}&day_type=eq.${encodeURIComponent(gymDay.name)}&select=exercise,weight_kg`) || [],
+    api('gym_logs', 'GET', null,
+      `?log_date=neq.${today()}&day_type=eq.${encodeURIComponent(gymDay.name)}&order=log_date.desc&limit=60&select=exercise,weight_kg,log_date`),
+  ]);
+  const savedWeights = {};
+  (saved || []).forEach(s => { savedWeights[s.exercise] = s.weight_kg; });
+
+  // Last weight per exercise from previous sessions
+  const lastWeights = {};
+  (prevLogs || []).forEach(l => {
+    if (!lastWeights[l.exercise] && l.weight_kg) lastWeights[l.exercise] = l.weight_kg;
+  });
+
+  container.innerHTML = `<div class="workout-title">${gymDay.name}</div>`;
+  const card = document.createElement('div');
+  card.className = 'card';
+
+  gymDay.exercises.forEach(ex => {
+    const key = ex.name;
+    if (!gymState[key]) gymState[key] = { done: false, weight: savedWeights[key] || '' };
+    const prev = lastWeights[key];
+    const hint = prev ? `last: ${prev}kg` : 'first session';
+    const item = document.createElement('div');
+    item.className = 'exercise-item';
+    item.innerHTML = `
+      <div class="exercise-done ${gymState[key].done ? 'done' : ''}" id="gym-${key}">${checkSVG()}</div>
+      <div class="exercise-info">
+        <div class="exercise-name">${ex.name}</div>
+        <div class="exercise-sets">${ex.sets}×${ex.reps} <span style="color:var(--muted);font-size:11px">· ${hint}</span></div>
+      </div>
+      <input type="number" class="weight-input" placeholder="kg" value="${gymState[key].weight}" id="weight-${key}" min="0" step="0.5">
+    `;
+    item.querySelector(`#gym-${key}`).addEventListener('click', () => {
+      gymState[key].done = !gymState[key].done;
+      item.querySelector(`#gym-${key}`).classList.toggle('done', gymState[key].done);
+    });
+    item.querySelector(`#weight-${key}`).addEventListener('change', async e => {
+      gymState[key].weight = e.target.value;
+      await saveGymExercise(gymDay.name, ex, e.target.value);
+    });
+    card.appendChild(item);
+  });
+
+  container.appendChild(card);
+
+  const btn = document.createElement('button');
+  btn.className = 'log-btn';
+  btn.textContent = 'Save Workout';
+  btn.addEventListener('click', () => saveWorkout(gymDay));
+  container.appendChild(btn);
+}
+
+async function saveGymExercise(dayType, ex, weight) {
+  const logDate = today();
+  const existing = await api('gym_logs', 'GET', null,
+    `?log_date=eq.${logDate}&exercise=eq.${encodeURIComponent(ex.name)}&limit=1`);
+  const payload = { log_date: logDate, day_type: dayType, exercise: ex.name, sets: ex.sets, reps: ex.reps, weight_kg: weight || null };
+  if (existing && existing.length > 0) {
+    await api('gym_logs', 'PATCH', { weight_kg: weight || null },
+      `?log_date=eq.${logDate}&exercise=eq.${encodeURIComponent(ex.name)}`);
+  } else {
+    await api('gym_logs', 'POST', payload).catch(() => {});
+  }
+}
+
+async function saveWorkout(gymDay) {
+  for (const ex of gymDay.exercises) {
+    const key = ex.name;
+    await saveGymExercise(gymDay.name, ex, gymState[key]?.weight || null);
+  }
+  showToast('Workout saved');
+}
+
+async function renderGymHistory() {
+  const container = document.getElementById('gym-history');
+  const logs = await api('gym_logs', 'GET', null,
+    '?order=log_date.desc&limit=40') || [];
+
+  if (logs.length === 0) {
+    container.innerHTML = '<div class="empty">No workout history yet</div>';
+    return;
+  }
+
+  // Group by date+day_type
+  const grouped = {};
+  logs.forEach(l => {
+    const key = `${l.log_date}|${l.day_type}`;
+    if (!grouped[key]) grouped[key] = { date: l.log_date, type: l.day_type, exercises: [] };
+    grouped[key].exercises.push(l);
+  });
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  Object.values(grouped).forEach(g => {
+    const item = document.createElement('div');
+    item.className = 'history-item';
+    const exList = g.exercises
+      .filter(e => e.weight_kg)
+      .map(e => `${e.exercise}: ${e.weight_kg}kg`)
+      .join(' · ');
+    item.innerHTML = `
+      <div class="history-date">${g.date} — ${g.type}</div>
+      <div class="history-detail">${exList || 'No weights logged'}</div>`;
+    card.appendChild(item);
+  });
+  container.appendChild(card);
+}
+
+// ─── PROGRESS SCREEN ──────────────────────────────────────────────────────────
+async function renderProgress() {
+  await loadProgressData();
+  renderStats();
+  renderCharts();
+  renderWelcomeBack();
+}
+
+async function loadProgressData() {
+  try {
+    const [ratings30, weeklyLogs, gymLogs30] = await Promise.all([
+      api('daily_ratings', 'GET', null, '?order=log_date.asc&limit=30'),
+      api('weekly_logs', 'GET', null, '?order=week_start.asc&limit=12'),
+      api('gym_logs', 'GET', null, '?order=log_date.asc&limit=60'),
+    ]);
+    progressData = { ratings30: ratings30 || [], weeklyLogs: weeklyLogs || [], gymLogs30: gymLogs30 || [] };
+  } catch (e) { progressData = { ratings30: [], weeklyLogs: [], gymLogs30: [] }; }
+}
+
+function renderStats() {
+  const d = progressData;
+  const day = dayNumber();
+  const totalDays = d.ratings30.length;
+  const compliance = totalDays > 0
+    ? Math.round((d.ratings30.filter(r => r.skin_score || r.energy_score).length / Math.min(day, 30)) * 100)
+    : 0;
+  const skinScores = d.ratings30.filter(r => r.skin_score).map(r => r.skin_score);
+  const avgSkin = skinScores.length > 0 ? (skinScores.reduce((a,b) => a+b, 0) / skinScores.length).toFixed(1) : '—';
+  const gymSessions = new Set(d.gymLogs30.map(g => g.log_date)).size;
+
+  // Streak
+  let streak = 0;
+  const today_ = today();
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(today_);
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split('T')[0];
+    const found = progressData.ratings30.find(r => r.log_date === dateStr);
+    if (found) streak++; else break;
+  }
+
+  document.getElementById('stat-streak').textContent = streak;
+  document.getElementById('stat-compliance').textContent = compliance + '%';
+  document.getElementById('stat-skin').textContent = avgSkin;
+  document.getElementById('stat-gym').textContent = gymSessions;
+}
+
+function renderCharts() {
+  const d = progressData;
+
+  // Weight chart
+  drawLineChart('chart-weight',
+    d.weeklyLogs.filter(w => w.weight_kg).map(w => ({ x: w.week_start.slice(5), y: w.weight_kg })),
+    'kg', '#4caf50');
+
+  // Skin score
+  drawLineChart('chart-skin',
+    d.ratings30.filter(r => r.skin_score).map(r => ({ x: r.log_date.slice(5), y: r.skin_score })),
+    '', '#c8a0f5', 1, 5);
+
+  // Pain levels
+  drawMultiLineChart('chart-pain', d.ratings30, [
+    { key: 'pain_hip', color: '#f5a0a0', label: 'Hip' },
+    { key: 'pain_knee', color: '#f5c8a0', label: 'Knee' },
+    { key: 'pain_back', color: '#a0c8f5', label: 'Back' },
+  ]);
+
+  // Gym frequency
+  const gymByWeek = {};
+  d.gymLogs30.forEach(g => {
+    const d = new Date(g.log_date);
+    const wk = getWeekStart(d);
+    gymByWeek[wk] = (gymByWeek[wk] || new Set()).add(g.log_date);
+  });
+  drawLineChart('chart-gym',
+    Object.entries(gymByWeek).sort().map(([k, v]) => ({ x: k.slice(5), y: v.size })),
+    ' sessions', '#4caf50', 0, 5);
+}
+
+function getWeekStart(date) {
+  const d = new Date(date);
+  d.setDate(d.getDate() - d.getDay());
+  return d.toISOString().split('T')[0];
+}
+
+function drawLineChart(id, data, unit, color, yMin, yMax) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  if (data.length < 2) {
+    ctx.fillStyle = '#ccc';
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Not enough data yet', W/2, H/2);
+    return;
+  }
+
+  const vals = data.map(d => d.y);
+  const min = yMin !== undefined ? yMin : Math.min(...vals) * 0.95;
+  const max = yMax !== undefined ? yMax : Math.max(...vals) * 1.05;
+  const pad = { top: 12, right: 12, bottom: 28, left: 38 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+
+  const xScale = i => pad.left + (i / (data.length - 1)) * cW;
+  const yScale = v => pad.top + cH - ((v - min) / (max - min)) * cH;
+
+  // Grid lines
+  ctx.strokeStyle = '#f0ede9';
+  ctx.lineWidth = 1;
+  [0.25, 0.5, 0.75, 1].forEach(t => {
+    const y = pad.top + cH * (1 - t);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cW, y); ctx.stroke();
+  });
+
+  // Line
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  data.forEach((d, i) => {
+    if (i === 0) ctx.moveTo(xScale(i), yScale(d.y));
+    else ctx.lineTo(xScale(i), yScale(d.y));
+  });
+  ctx.stroke();
+
+  // Dots
+  ctx.fillStyle = color;
+  data.forEach((d, i) => {
+    ctx.beginPath();
+    ctx.arc(xScale(i), yScale(d.y), 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // X labels (first, last, middle)
+  ctx.fillStyle = '#aaa';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  [0, Math.floor(data.length / 2), data.length - 1].forEach(i => {
+    if (data[i]) ctx.fillText(data[i].x, xScale(i), H - 8);
+  });
+
+  // Y labels
+  ctx.textAlign = 'right';
+  [min, (min+max)/2, max].forEach(v => {
+    const y = yScale(v);
+    ctx.fillText(v.toFixed(1).replace(/\.0$/, '') + unit, pad.left - 4, y + 4);
+  });
+}
+
+function drawMultiLineChart(id, rows, series) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const hasData = rows.some(r => series.some(s => r[s.key]));
+  if (!hasData) {
+    ctx.fillStyle = '#ccc';
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Not enough data yet', W/2, H/2);
+    return;
+  }
+
+  const pad = { top: 12, right: 12, bottom: 28, left: 28 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+
+  const xScale = i => pad.left + (i / Math.max(rows.length - 1, 1)) * cW;
+  const yScale = v => pad.top + cH - ((v - 1) / 4) * cH;
+
+  series.forEach(s => {
+    const pts = rows.map((r, i) => ({ i, v: r[s.key] })).filter(p => p.v);
+    if (pts.length < 2) return;
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    pts.forEach((p, j) => {
+      if (j === 0) ctx.moveTo(xScale(p.i), yScale(p.v));
+      else ctx.lineTo(xScale(p.i), yScale(p.v));
+    });
+    ctx.stroke();
+  });
+
+  // Legend
+  ctx.font = '10px sans-serif';
+  series.forEach((s, i) => {
+    ctx.fillStyle = s.color;
+    ctx.fillRect(pad.left + i * 55, H - 10, 8, 8);
+    ctx.fillStyle = '#888';
+    ctx.fillText(s.label, pad.left + i * 55 + 11, H - 3);
+  });
+}
+
+function renderWelcomeBack() {
+  const wb = document.getElementById('welcome-back');
+  const day = dayNumber();
+  const d = progressData;
+
+  // Check if 2+ days missed
+  let missed = 0;
+  for (let i = 1; i <= 3; i++) {
+    const dt = new Date(today());
+    dt.setDate(dt.getDate() - i);
+    const ds = dt.toISOString().split('T')[0];
+    if (!d.ratings30.find(r => r.log_date === ds)) missed++;
+  }
+
+  wb.style.display = missed >= 2 ? 'block' : 'none';
+}
+
+// ─── SETTINGS SCREEN ──────────────────────────────────────────────────────────
+function renderSettings() {
+  renderHabitList();
+  renderProfileSettings();
+}
+
+function renderHabitList() {
+  const container = document.getElementById('habits-list');
+  container.innerHTML = '';
+
+  BLOCK_ORDER.forEach(blockId => {
+    const meta = BLOCK_META[blockId];
+    const blockHabits = habits.filter(h => h.block === blockId)
+      .sort((a,b) => (a.item_order||0) - (b.item_order||0));
+
+    const title = document.createElement('div');
+    title.className = 'section-title';
+    title.textContent = `${meta.icon} ${meta.label}`;
+    container.appendChild(title);
+
+    blockHabits.forEach(h => {
+      const item = document.createElement('div');
+      item.className = 'settings-habit-item';
+      item.innerHTML = `
+        <div class="settings-habit-label">${h.label}</div>
+        <div class="settings-habit-block">${h.sub || ''}</div>
+        <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
+      `;
+      item.addEventListener('click', () => openEditHabit(h));
+      container.appendChild(item);
+    });
+  });
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'add-habit-btn';
+  addBtn.innerHTML = `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="4" x2="10" y2="16"/><line x1="4" y1="10" x2="16" y2="10"/></svg> Add habit`;
+  addBtn.addEventListener('click', () => openEditHabit(null));
+  container.appendChild(addBtn);
+}
+
+function renderProfileSettings() {
+  const startInput = document.getElementById('profile-start');
+  const weightInput = document.getElementById('profile-weight');
+
+  if (startInput) {
+    startInput.value = localStorage.getItem('startDate') || START_DATE;
+    startInput.addEventListener('change', e => {
+      localStorage.setItem('startDate', e.target.value);
+      updateHeaderDay();
+    });
+  }
+
+  if (weightInput) {
+    // Load latest weight
+    api('weekly_logs', 'GET', null, '?order=week_start.desc&limit=1').then(rows => {
+      if (rows && rows[0]) weightInput.value = rows[0].weight_kg || '';
+    });
+    weightInput.addEventListener('change', async e => {
+      const wk = getWeekStart(new Date());
+      const existing = await api('weekly_logs', 'GET', null, `?week_start=eq.${wk}&limit=1`);
+      if (existing && existing.length > 0) {
+        await api('weekly_logs', 'PATCH', { weight_kg: e.target.value }, `?week_start=eq.${wk}`);
+      } else {
+        await api('weekly_logs', 'POST', { week_start: wk, weight_kg: e.target.value });
+      }
+      showToast('Weight saved');
+    });
+  }
+}
+
+function updateHeaderDay() {
+  document.querySelector('.header-day').textContent = `Day ${dayNumber()}/30`;
+}
+
+// ─── EDIT HABIT MODAL ──────────────────────────────────────────────────────────
+function openEditHabit(habit) {
+  const modal = document.getElementById('edit-modal');
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+
+  title.textContent = habit ? 'Edit Habit' : 'New Habit';
+
+  document.getElementById('edit-label').value = habit?.label || '';
+  document.getElementById('edit-sub').value = habit?.sub || '';
+  document.getElementById('edit-block').value = habit?.block || 'morning';
+  document.getElementById('edit-freq').value = habit?.frequency || 'daily';
+  document.getElementById('edit-status').value = habit?.status || 'have';
+  document.getElementById('edit-notes').value = habit?.notes || '';
+
+  const saveBtn = document.getElementById('edit-save');
+  const deleteBtn = document.getElementById('edit-delete');
+
+  saveBtn.onclick = async () => {
+    const payload = {
+      label: document.getElementById('edit-label').value.trim(),
+      sub: document.getElementById('edit-sub').value.trim() || null,
+      block: document.getElementById('edit-block').value,
+      frequency: document.getElementById('edit-freq').value,
+      status: document.getElementById('edit-status').value,
+      notes: document.getElementById('edit-notes').value.trim() || null,
+    };
+    if (!payload.label) { showToast('Label required'); return; }
+
+    try {
+      if (habit) {
+        await api('habits', 'PATCH', payload, `?id=eq.${habit.id}`);
+      } else {
+        const maxOrder = Math.max(0, ...habits.filter(h => h.block === payload.block).map(h => h.item_order || 0));
+        payload.item_order = maxOrder + 1;
+        await api('habits', 'POST', payload);
+      }
+      await loadHabits();
+      renderToday();
+      renderHabitList();
+      closeModal();
+      showToast(habit ? 'Habit updated' : 'Habit added');
+    } catch (e) { showToast('Error saving'); }
+  };
+
+  deleteBtn.style.display = habit ? 'block' : 'none';
+  if (habit) {
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Delete "${habit.label}"?`)) return;
+      await api('habits', 'DELETE', null, `?id=eq.${habit.id}`);
+      await loadHabits();
+      renderToday();
+      renderHabitList();
+      closeModal();
+      showToast('Habit deleted');
+    };
+  }
+
+  overlay.classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+// ─── NAVIGATION ───────────────────────────────────────────────────────────────
+function setupNav() {
+  const navBtns = document.querySelectorAll('.nav-btn');
+  navBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const screen = btn.dataset.screen;
+      navBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById(`screen-${screen}`).classList.add('active');
+      if (screen === 'gym') renderGym();
+      if (screen === 'progress') renderProgress();
+      if (screen === 'settings') renderSettings();
+    });
+  });
+
+  // Header
+  const dayEl = document.querySelector('.header-day');
+  const dateEl = document.querySelector('.header-date');
+  dayEl.textContent = `Day ${dayNumber()}/30`;
+  dateEl.textContent = new Date().toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
+// ─── MODAL OVERLAY CLOSE ──────────────────────────────────────────────────────
+document.getElementById('modal-overlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal-overlay')) closeModal();
+});
+
+document.getElementById('modal-close').addEventListener('click', closeModal);
+
+// ─── START ────────────────────────────────────────────────────────────────────
+init();

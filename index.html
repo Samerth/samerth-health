@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1a1a1a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <title>Samerth</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ─── HEADER ─── -->
+<div class="header">
+  <div class="header-top">
+    <div class="header-title">Samerth</div>
+    <div class="header-day">Day —/30</div>
+  </div>
+  <div class="header-date"></div>
+  <div class="progress-bar">
+    <div class="progress-fill" style="width:0%"></div>
+  </div>
+</div>
+
+<!-- ─── TODAY SCREEN ─── -->
+<div class="screen active" id="screen-today">
+  <div id="today-blocks"></div>
+  <button class="log-btn" id="log-btn">Log Day</button>
+</div>
+
+<!-- ─── GYM SCREEN ─── -->
+<div class="screen" id="screen-gym">
+  <div id="gym-content"></div>
+  <div class="section-title">History</div>
+  <div id="gym-history"></div>
+</div>
+
+<!-- ─── PROGRESS SCREEN ─── -->
+<div class="screen" id="screen-progress">
+  <div class="welcome-back" id="welcome-back" style="display:none">
+    Welcome back, Samerth 👋<br>
+    <span style="font-size:13px;font-family:sans-serif;color:#a07800">No pressure — every day is a fresh start.</span>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-value" id="stat-streak">—</div><div class="stat-label">Streak</div></div>
+    <div class="stat-card"><div class="stat-value" id="stat-compliance">—</div><div class="stat-label">Compliance</div></div>
+    <div class="stat-card"><div class="stat-value" id="stat-skin">—</div><div class="stat-label">Avg Skin</div></div>
+    <div class="stat-card"><div class="stat-value" id="stat-gym">—</div><div class="stat-label">Gym Days</div></div>
+  </div>
+
+  <div class="chart-card">
+    <div class="chart-title">Weight (kg)</div>
+    <canvas id="chart-weight" width="420" height="140"></canvas>
+  </div>
+
+  <div class="chart-card">
+    <div class="chart-title">Skin Score</div>
+    <canvas id="chart-skin" width="420" height="140"></canvas>
+  </div>
+
+  <div class="chart-card">
+    <div class="chart-title">Pain Levels</div>
+    <canvas id="chart-pain" width="420" height="140"></canvas>
+  </div>
+
+  <div class="chart-card">
+    <div class="chart-title">Gym Frequency</div>
+    <canvas id="chart-gym" width="420" height="140"></canvas>
+  </div>
+
+  <div class="section-title">Journey</div>
+  <div class="photo-row">
+    <div class="photo-slot" id="photo-start">
+      <span style="font-size:28px">📸</span>
+      <span class="photo-slot-label">Day 1</span>
+    </div>
+    <div class="photo-slot" id="photo-latest">
+      <span style="font-size:28px">📷</span>
+      <span class="photo-slot-label">Latest</span>
+    </div>
+  </div>
+  <button class="photo-upload-btn" onclick="document.getElementById('photo-file').click()">
+    + Upload weekly photo
+  </button>
+  <input type="file" id="photo-file" accept="image/*" style="display:none" onchange="handlePhotoUpload(event)">
+</div>
+
+<!-- ─── SETTINGS SCREEN ─── -->
+<div class="screen" id="screen-settings">
+  <div class="section-title">Profile</div>
+  <div class="profile-card">
+    <div class="profile-row">
+      <label>Start date</label>
+      <input type="date" class="profile-input" id="profile-start">
+    </div>
+    <div class="profile-row">
+      <label>Weight (kg)</label>
+      <input type="number" class="profile-input" id="profile-weight" step="0.1" placeholder="—">
+    </div>
+  </div>
+
+  <div class="section-title">Habits</div>
+  <div class="settings-habit-list" id="habits-list"></div>
+
+  <div class="section-title">Gym</div>
+  <div class="settings-section">
+    <div class="settings-item">
+      <div class="settings-item-icon">🏋️</div>
+      <div class="settings-item-label">Upper/Lower 4-day split</div>
+      <div class="settings-arrow">Mon · Tue · Thu · Fri</div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── BOTTOM NAV ─── -->
+<nav class="nav">
+  <button class="nav-btn active" data-screen="today">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <rect x="3" y="4" width="18" height="18" rx="2"/>
+      <line x1="16" y1="2" x2="16" y2="6"/>
+      <line x1="8" y1="2" x2="8" y2="6"/>
+      <line x1="3" y1="10" x2="21" y2="10"/>
+    </svg>
+    Today
+  </button>
+  <button class="nav-btn" data-screen="gym">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <path d="M6 4v16M18 4v16M3 9h4M17 9h4M3 15h4M17 15h4"/>
+    </svg>
+    Gym
+  </button>
+  <button class="nav-btn" data-screen="progress">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+    </svg>
+    Progress
+  </button>
+  <button class="nav-btn" data-screen="settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+    Settings
+  </button>
+</nav>
+
+<!-- ─── EDIT HABIT MODAL ─── -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title">Edit Habit</div>
+      <button class="modal-close" id="modal-close">✕</button>
+    </div>
+    <div class="edit-row">
+      <label>Label</label>
+      <input type="text" class="edit-input" id="edit-label" placeholder="e.g. Vitamin D3">
+    </div>
+    <div class="edit-row">
+      <label>Sub-label / note</label>
+      <input type="text" class="edit-input" id="edit-sub" placeholder="e.g. with breakfast">
+    </div>
+    <div class="edit-row">
+      <label>Time block</label>
+      <select class="edit-select" id="edit-block">
+        <option value="morning">🌅 Morning</option>
+        <option value="midday">☀️ Midday</option>
+        <option value="physio">💪 Physio</option>
+        <option value="evening">🌙 Evening</option>
+        <option value="bedtime">🛌 Bedtime</option>
+      </select>
+    </div>
+    <div class="edit-row">
+      <label>Frequency</label>
+      <select class="edit-select" id="edit-freq">
+        <option value="daily">Daily</option>
+        <option value="weekdays">Weekdays</option>
+        <option value="weekends">Weekends</option>
+        <option value="3-5x">3–5×/week</option>
+      </select>
+    </div>
+    <div class="edit-row">
+      <label>Status</label>
+      <select class="edit-select" id="edit-status">
+        <option value="have">Have ✓</option>
+        <option value="buy">Need to buy</option>
+        <option value="rx">Prescription (Rx)</option>
+        <option value="paused">Paused</option>
+      </select>
+    </div>
+    <div class="edit-row">
+      <label>Notes</label>
+      <input type="text" class="edit-input" id="edit-notes" placeholder="Optional notes">
+    </div>
+    <button class="save-btn" id="edit-save">Save</button>
+    <button class="delete-btn" id="edit-delete" style="display:none">Delete habit</button>
+  </div>
+</div>
+
+<!-- ─── TOAST ─── -->
+<div class="toast" id="toast"></div>
+
+<!-- ─── SUPABASE CDN ─── -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// Photo upload handler (needs Supabase storage bucket set up)
+async function handlePhotoUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const wk = getWeekStart(new Date());
+    localStorage.setItem(`photo-${wk}`, e.target.result);
+    document.getElementById('photo-latest').innerHTML =
+      `<img src="${e.target.result}" alt="Weekly photo">`;
+    showToast('Photo saved locally');
+  };
+  reader.readAsDataURL(file);
+}
+
+function getWeekStart(date) {
+  const d = new Date(date);
+  d.setDate(d.getDate() - d.getDay());
+  return d.toISOString().split('T')[0];
+}
+</script>
+<script src="app.js"></script>
+</body>
+</html>
