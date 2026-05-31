@@ -172,15 +172,16 @@ function renderToday() {
   const container = document.getElementById('today-blocks');
   container.innerHTML = '';
 
-  // Buy list card
+  // Buy list card (habit items marked buy + standalone shopping items not yet bought)
   const buyItems = habits.filter(h => h.status === 'buy');
   if (buyItems.length > 0) {
     const buyCard = document.createElement('div');
-    buyCard.className = 'card';
+    buyCard.className = 'card buy-card';
     buyCard.style.cssText = 'margin:10px 14px;border-left:3px solid #f5a623;';
     buyCard.innerHTML = `
-      <div style="padding:11px 14px 8px;font-family:Georgia,serif;font-size:13px;color:#b87000;letter-spacing:.3px;">
-        🛒 Need to buy (${buyItems.length})
+      <div style="padding:11px 14px 6px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-family:Georgia,serif;font-size:13px;color:#b87000;">🛒 Need to buy (${buyItems.length})</span>
+        <button onclick="document.querySelector('[data-screen=settings]').click();setTimeout(()=>document.getElementById('shopping-settings').scrollIntoView({behavior:'smooth'}),300)" style="background:none;border:none;font-size:11px;color:var(--muted);cursor:pointer;font-family:inherit;">Manage →</button>
       </div>
       <div style="padding:0 14px 12px;display:flex;flex-wrap:wrap;gap:6px;">
         ${buyItems.map(h => `<span style="background:#fff3cd;color:#856404;border:1px solid #f5d87a;border-radius:20px;padding:4px 11px;font-size:13px;">${h.label}</span>`).join('')}
@@ -811,6 +812,8 @@ function renderWelcomeBack() {
 function renderSettings() {
   renderHabitList();
   renderProfileSettings();
+  renderGymSettings();
+  renderShoppingSettings();
 }
 
 function renderHabitList() {
@@ -881,6 +884,198 @@ function renderProfileSettings() {
 
 function updateHeaderDay() {
   document.querySelector('.header-day').textContent = `Day ${dayNumber()}/30`;
+}
+
+// ─── GYM SETTINGS ─────────────────────────────────────────────────────────────
+function renderGymSettings() {
+  const container = document.getElementById('gym-settings-list');
+  if (!container) return;
+  container.innerHTML = '';
+  Object.entries(GYM_PLAN).forEach(([dow, plan]) => {
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const item = document.createElement('div');
+    item.className = 'settings-item';
+    item.innerHTML = `
+      <div class="settings-item-icon">🏋️</div>
+      <div style="flex:1">
+        <div class="settings-item-label">${plan.name}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">${days[dow]} · ${plan.exercises.length} exercises</div>
+      </div>
+      <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
+    `;
+    item.style.cssText = 'margin-bottom:8px;cursor:pointer;';
+    item.addEventListener('click', () => openGymModal(+dow, plan));
+    container.appendChild(item);
+  });
+}
+
+function openGymModal(dow, plan) {
+  const overlay = document.getElementById('gym-modal-overlay');
+  document.getElementById('gym-modal-title').textContent = plan.name;
+  const body = document.getElementById('gym-modal-body');
+  body.innerHTML = '';
+
+  const card = document.createElement('div');
+  card.style.cssText = 'margin:10px 18px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
+
+  plan.exercises.forEach((ex, idx) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid #f0ede9;';
+    if (idx === plan.exercises.length - 1) row.style.borderBottom = 'none';
+    row.innerHTML = `
+      <div style="flex:1">
+        <div style="font-size:14px">${ex.name}</div>
+        <div style="font-size:12px;color:var(--muted)">${ex.sets} sets × ${ex.reps} reps</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="number" value="${ex.sets}" min="1" max="10" style="width:38px;border:1.5px solid var(--border);border-radius:6px;padding:4px;font-size:13px;text-align:center;background:#fff;" data-idx="${idx}" data-field="sets">
+        <span style="font-size:12px;color:var(--muted)">×</span>
+        <input type="number" value="${ex.reps}" min="1" max="50" style="width:38px;border:1.5px solid var(--border);border-radius:6px;padding:4px;font-size:13px;text-align:center;background:#fff;" data-idx="${idx}" data-field="reps">
+      </div>
+    `;
+    card.appendChild(row);
+  });
+
+  body.appendChild(card);
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'save-btn';
+  saveBtn.textContent = 'Save changes';
+  saveBtn.addEventListener('click', () => {
+    card.querySelectorAll('input[data-field]').forEach(input => {
+      const idx = +input.dataset.idx;
+      const field = input.dataset.field;
+      GYM_PLAN[dow].exercises[idx][field] = +input.value;
+    });
+    localStorage.setItem('gymPlan', JSON.stringify(GYM_PLAN));
+    closeGymModal();
+    renderGymSettings();
+    showToast('Workout updated');
+  });
+  body.appendChild(saveBtn);
+  overlay.classList.add('open');
+}
+
+function closeGymModal() {
+  document.getElementById('gym-modal-overlay').classList.remove('open');
+}
+
+// ─── SHOPPING LIST ────────────────────────────────────────────────────────────
+// Stored as habits with block='shopping'. status='buy' = unpurchased, 'have' = bought.
+
+async function loadShoppingItems() {
+  return (habits.filter(h => h.block === 'shopping'));
+}
+
+function renderShoppingSettings() {
+  const container = document.getElementById('shopping-settings');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const items = habits.filter(h => h.block === 'shopping');
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.style.margin = '0 0 8px';
+
+  if (items.length === 0) {
+    card.innerHTML = '<div class="empty" style="padding:16px">No items yet</div>';
+  } else {
+    items.forEach(h => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid #f0ede9;';
+      const bought = h.status === 'have';
+      row.innerHTML = `
+        <div class="habit-check ${bought ? 'checked' : ''}" id="shop-check-${h.id}" style="flex-shrink:0;cursor:pointer;">${checkSVG()}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:14px;${bought ? 'text-decoration:line-through;color:var(--muted);' : ''}">${h.label}</div>
+          ${h.sub ? `<div style="font-size:12px;color:var(--muted)">${h.sub}</div>` : ''}
+        </div>
+        <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14" style="cursor:pointer" id="shop-edit-${h.id}"><polyline points="7,5 13,10 7,15"/></svg>
+      `;
+      row.querySelector(`#shop-check-${h.id}`).addEventListener('click', () => toggleShopItem(h));
+      row.querySelector(`#shop-edit-${h.id}`).addEventListener('click', () => openShopModal(h));
+      card.appendChild(row);
+    });
+  }
+  container.appendChild(card);
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'add-habit-btn';
+  addBtn.innerHTML = `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="4" x2="10" y2="16"/><line x1="4" y1="10" x2="16" y2="10"/></svg> Add item`;
+  addBtn.addEventListener('click', () => openShopModal(null));
+  container.appendChild(addBtn);
+}
+
+async function toggleShopItem(h) {
+  const newStatus = h.status === 'buy' ? 'have' : 'buy';
+  await api('habits', 'PATCH', { status: newStatus }, `?id=eq.${h.id}`);
+  await loadHabits();
+  renderShoppingSettings();
+  renderBuyCard();
+}
+
+function renderBuyCard() {
+  // Re-render buy card on Today screen without full re-render
+  const container = document.getElementById('today-blocks');
+  const existing = container.querySelector('.buy-card');
+  const buyItems = habits.filter(h => h.block === 'shopping' && h.status === 'buy')
+    .concat(habits.filter(h => h.block !== 'shopping' && h.status === 'buy'));
+  if (existing) existing.remove();
+  if (buyItems.length > 0) {
+    const buyCard = document.createElement('div');
+    buyCard.className = 'card buy-card';
+    buyCard.style.cssText = 'margin:10px 14px;border-left:3px solid #f5a623;';
+    buyCard.innerHTML = `
+      <div style="padding:11px 14px 6px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-family:Georgia,serif;font-size:13px;color:#b87000;">🛒 Need to buy (${buyItems.length})</span>
+        <button onclick="document.querySelector('[data-screen=settings]').click();setTimeout(()=>document.getElementById('shopping-settings').scrollIntoView({behavior:'smooth'}),200)" style="background:none;border:none;font-size:11px;color:var(--muted);cursor:pointer;font-family:inherit;">Manage →</button>
+      </div>
+      <div style="padding:0 14px 12px;display:flex;flex-wrap:wrap;gap:6px;">
+        ${buyItems.map(h => `<span style="background:#fff3cd;color:#856404;border:1px solid #f5d87a;border-radius:20px;padding:4px 11px;font-size:13px;">${h.label}</span>`).join('')}
+      </div>`;
+    container.insertBefore(buyCard, container.firstChild);
+  }
+}
+
+function openShopModal(item) {
+  const overlay = document.getElementById('shop-modal-overlay');
+  document.getElementById('shop-item-label').value = item?.label || '';
+  document.getElementById('shop-item-note').value = item?.sub || '';
+  const saveBtn = document.getElementById('shop-item-save');
+  const deleteBtn = document.getElementById('shop-item-delete');
+
+  saveBtn.onclick = async () => {
+    const label = document.getElementById('shop-item-label').value.trim();
+    if (!label) { showToast('Item name required'); return; }
+    const payload = { label, sub: document.getElementById('shop-item-note').value.trim() || null, block: 'shopping', status: 'buy', frequency: 'daily' };
+    if (item) {
+      await api('habits', 'PATCH', payload, `?id=eq.${item.id}`);
+    } else {
+      await api('habits', 'POST', payload);
+    }
+    await loadHabits();
+    renderShoppingSettings();
+    renderBuyCard();
+    closeShopModal();
+    showToast(item ? 'Item updated' : 'Item added');
+  };
+
+  deleteBtn.style.display = item ? 'block' : 'none';
+  if (item) {
+    deleteBtn.onclick = async () => {
+      await api('habits', 'DELETE', null, `?id=eq.${item.id}`);
+      await loadHabits();
+      renderShoppingSettings();
+      renderBuyCard();
+      closeShopModal();
+      showToast('Item removed');
+    };
+  }
+  overlay.classList.add('open');
+}
+
+function closeShopModal() {
+  document.getElementById('shop-modal-overlay').classList.remove('open');
 }
 
 // ─── EDIT HABIT MODAL ──────────────────────────────────────────────────────────
@@ -975,8 +1170,17 @@ function setupNav() {
 document.getElementById('modal-overlay').addEventListener('click', e => {
   if (e.target === document.getElementById('modal-overlay')) closeModal();
 });
-
 document.getElementById('modal-close').addEventListener('click', closeModal);
+
+document.getElementById('gym-modal-overlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('gym-modal-overlay')) closeGymModal();
+});
+document.getElementById('gym-modal-close').addEventListener('click', closeGymModal);
+
+document.getElementById('shop-modal-overlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('shop-modal-overlay')) closeShopModal();
+});
+document.getElementById('shop-modal-close').addEventListener('click', closeShopModal);
 
 // ─── START ────────────────────────────────────────────────────────────────────
 init();

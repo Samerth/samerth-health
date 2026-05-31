@@ -106,13 +106,10 @@
   <div class="settings-habit-list" id="habits-list"></div>
 
   <div class="section-title">Gym</div>
-  <div class="settings-section">
-    <div class="settings-item">
-      <div class="settings-item-icon">🏋️</div>
-      <div class="settings-item-label">Upper/Lower 4-day split</div>
-      <div class="settings-arrow">Mon · Tue · Thu · Fri</div>
-    </div>
-  </div>
+  <div class="settings-section" id="gym-settings-list"></div>
+
+  <div class="section-title">Shopping List</div>
+  <div class="settings-section" id="shopping-settings"></div>
 </div>
 
 <!-- ─── BOTTOM NAV ─── -->
@@ -196,6 +193,37 @@
     </div>
     <button class="save-btn" id="edit-save">Save</button>
     <button class="delete-btn" id="edit-delete" style="display:none">Delete habit</button>
+  </div>
+</div>
+
+<!-- ─── GYM SETTINGS MODAL ─── -->
+<div class="modal-overlay" id="gym-modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="gym-modal-title">Edit Workout</div>
+      <button class="modal-close" id="gym-modal-close">✕</button>
+    </div>
+    <div id="gym-modal-body"></div>
+  </div>
+</div>
+
+<!-- ─── SHOPPING ITEM MODAL ─── -->
+<div class="modal-overlay" id="shop-modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Shopping Item</div>
+      <button class="modal-close" id="shop-modal-close">✕</button>
+    </div>
+    <div class="edit-row">
+      <label>Item name</label>
+      <input type="text" class="edit-input" id="shop-item-label" placeholder="e.g. Protein powder">
+    </div>
+    <div class="edit-row">
+      <label>Note (optional)</label>
+      <input type="text" class="edit-input" id="shop-item-note" placeholder="e.g. unflavoured, 2kg">
+    </div>
+    <button class="save-btn" id="shop-item-save">Save</button>
+    <button class="delete-btn" id="shop-item-delete" style="display:none">Remove from list</button>
   </div>
 </div>
 
