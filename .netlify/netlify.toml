@@ -8,7 +8,7 @@ redirects = []
 
 [build]
 publish = "/Users/sam/Downloads/samerth-health"
-publishOrigin = "default"
+publishOrigin = "ui"
 
 [build.environment]
 

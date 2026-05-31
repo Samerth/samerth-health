@@ -13,6 +13,8 @@ let todayChecks = {}; // habitId -> boolean
 let ratings = { skin: 0, energy: 0, hip: 0, knee: 0, back: 0, weed: null, notes: '', sleep: '' };
 let gymState = {}; // exerciseName -> {done, weight}
 let progressData = {};
+let useKg = localStorage.getItem('useKg') !== 'false'; // default kg
+let savingChecks = {}; // habitId -> in-flight save promise
 
 // ─── GYM PLAN ─────────────────────────────────────────────────────────────────
 const GYM_PLAN = {
@@ -154,10 +156,37 @@ async function loadTodayLogs() {
   } catch (e) {}
 }
 
+// ─── UNIT HELPERS ─────────────────────────────────────────────────────────────
+function toDisplay(kg) {
+  if (!kg) return '';
+  return useKg ? kg : +(kg * 2.20462).toFixed(1);
+}
+function toKg(val) {
+  if (!val) return null;
+  return useKg ? +val : +(val / 2.20462).toFixed(2);
+}
+function unitLabel() { return useKg ? 'kg' : 'lbs'; }
+
 // ─── TODAY SCREEN ──────────────────────────────────────────────────────────────
 function renderToday() {
   const container = document.getElementById('today-blocks');
   container.innerHTML = '';
+
+  // Buy list card
+  const buyItems = habits.filter(h => h.status === 'buy');
+  if (buyItems.length > 0) {
+    const buyCard = document.createElement('div');
+    buyCard.className = 'card';
+    buyCard.style.cssText = 'margin:10px 14px;border-left:3px solid #f5a623;';
+    buyCard.innerHTML = `
+      <div style="padding:11px 14px 8px;font-family:Georgia,serif;font-size:13px;color:#b87000;letter-spacing:.3px;">
+        🛒 Need to buy (${buyItems.length})
+      </div>
+      <div style="padding:0 14px 12px;display:flex;flex-wrap:wrap;gap:6px;">
+        ${buyItems.map(h => `<span style="background:#fff3cd;color:#856404;border:1px solid #f5d87a;border-radius:20px;padding:4px 11px;font-size:13px;">${h.label}</span>`).join('')}
+      </div>`;
+    container.appendChild(buyCard);
+  }
 
   const now = new Date();
   const hour = now.getHours() + now.getMinutes() / 60;
@@ -304,11 +333,27 @@ function toggleBlock(blockId) {
 function toggleHabit(id) {
   todayChecks[id] = !todayChecks[id];
   const check = document.getElementById(`check-${id}`);
-  const item = check.closest('.habit-item');
-  check.classList.toggle('checked', todayChecks[id]);
-  item.classList.toggle('checked', todayChecks[id]);
+  const item = check?.closest('.habit-item');
+  check?.classList.toggle('checked', todayChecks[id]);
+  item?.classList.toggle('checked', todayChecks[id]);
   updateHeaderProgress();
   updateBlockCount(habits.find(h => h.id === id)?.block);
+  autoSaveCheck(id, todayChecks[id]);
+}
+
+async function autoSaveCheck(id, checked) {
+  const logDate = today();
+  try {
+    const existing = await api('daily_logs', 'GET', null,
+      `?log_date=eq.${logDate}&habit_id=eq.${id}&limit=1`);
+    if (existing && existing.length > 0) {
+      await api('daily_logs', 'PATCH', { checked }, `?log_date=eq.${logDate}&habit_id=eq.${id}`);
+    } else {
+      await api('daily_logs', 'POST', { log_date: logDate, habit_id: id, checked });
+    }
+  } catch (e) {
+    // silent — will retry on Log Day
+  }
 }
 
 function updateBlockCount(blockId) {
@@ -338,27 +383,27 @@ function updateHeaderProgress() {
 }
 
 // ─── SAVE DAY ──────────────────────────────────────────────────────────────────
+// Checks are auto-saved on tap. Log Day saves ratings + any missed checks.
 async function saveDay() {
   const btn = document.getElementById('log-btn');
   btn.textContent = 'Saving…';
 
   try {
-    // Upsert all habit checks
     const logDate = today();
+
+    // Re-sync any checks that may have failed silently
     for (const h of habits) {
       const checked = !!todayChecks[h.id];
-      // Check if log exists
       const existing = await api('daily_logs', 'GET', null,
         `?log_date=eq.${logDate}&habit_id=eq.${h.id}&limit=1`);
       if (existing && existing.length > 0) {
-        await api('daily_logs', 'PATCH', { checked },
-          `?log_date=eq.${logDate}&habit_id=eq.${h.id}`);
+        await api('daily_logs', 'PATCH', { checked }, `?log_date=eq.${logDate}&habit_id=eq.${h.id}`);
       } else {
         await api('daily_logs', 'POST', { log_date: logDate, habit_id: h.id, checked });
       }
     }
 
-    // Upsert ratings
+    // Save ratings
     const ratingPayload = {
       log_date: logDate,
       skin_score: ratings.skin || null,
@@ -370,9 +415,7 @@ async function saveDay() {
       notes: ratings.notes || null,
       sleep_time: ratings.sleep || null,
     };
-
-    const existingRating = await api('daily_ratings', 'GET', null,
-      `?log_date=eq.${logDate}&limit=1`);
+    const existingRating = await api('daily_ratings', 'GET', null, `?log_date=eq.${logDate}&limit=1`);
     if (existingRating && existingRating.length > 0) {
       await api('daily_ratings', 'PATCH', ratingPayload, `?log_date=eq.${logDate}`);
     } else {
@@ -436,15 +479,24 @@ async function renderWorkout(gymDay, container) {
     if (!lastWeights[l.exercise] && l.weight_kg) lastWeights[l.exercise] = l.weight_kg;
   });
 
-  container.innerHTML = `<div class="workout-title">${gymDay.name}</div>`;
+  container.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px 4px;">
+      <div class="workout-title" style="padding:0;">${gymDay.name}</div>
+      <div style="display:flex;gap:0;border:1.5px solid var(--border);border-radius:8px;overflow:hidden;">
+        <button id="unit-kg" onclick="setUnit(true)" style="padding:5px 12px;border:none;font-size:12px;cursor:pointer;font-family:inherit;background:${useKg ? 'var(--header)' : '#fff'};color:${useKg ? '#fff' : 'var(--muted)'};">kg</button>
+        <button id="unit-lbs" onclick="setUnit(false)" style="padding:5px 12px;border:none;font-size:12px;cursor:pointer;font-family:inherit;background:${!useKg ? 'var(--header)' : '#fff'};color:${!useKg ? '#fff' : 'var(--muted)'};">lbs</button>
+      </div>
+    </div>`;
   const card = document.createElement('div');
   card.className = 'card';
 
   gymDay.exercises.forEach(ex => {
     const key = ex.name;
-    if (!gymState[key]) gymState[key] = { done: false, weight: savedWeights[key] || '' };
+    const savedKg = savedWeights[key];
+    const displayVal = savedKg ? toDisplay(savedKg) : '';
+    if (!gymState[key]) gymState[key] = { done: false, weight: savedKg || '' };
     const prev = lastWeights[key];
-    const hint = prev ? `last: ${prev}kg` : 'first session';
+    const hint = prev ? `last: ${toDisplay(prev)}${unitLabel()}` : 'first session';
     const item = document.createElement('div');
     item.className = 'exercise-item';
     item.innerHTML = `
@@ -453,15 +505,16 @@ async function renderWorkout(gymDay, container) {
         <div class="exercise-name">${ex.name}</div>
         <div class="exercise-sets">${ex.sets}×${ex.reps} <span style="color:var(--muted);font-size:11px">· ${hint}</span></div>
       </div>
-      <input type="number" class="weight-input" placeholder="kg" value="${gymState[key].weight}" id="weight-${key}" min="0" step="0.5">
+      <input type="number" class="weight-input" placeholder="${unitLabel()}" value="${displayVal}" id="weight-${key}" min="0" step="0.5">
     `;
     item.querySelector(`#gym-${key}`).addEventListener('click', () => {
       gymState[key].done = !gymState[key].done;
       item.querySelector(`#gym-${key}`).classList.toggle('done', gymState[key].done);
     });
     item.querySelector(`#weight-${key}`).addEventListener('change', async e => {
-      gymState[key].weight = e.target.value;
-      await saveGymExercise(gymDay.name, ex, e.target.value);
+      const kg = toKg(e.target.value);
+      gymState[key].weight = kg;
+      await saveGymExercise(gymDay.name, ex, kg);
     });
     card.appendChild(item);
   });
@@ -496,6 +549,13 @@ async function saveWorkout(gymDay) {
   showToast('Workout saved');
 }
 
+function setUnit(kg) {
+  useKg = kg;
+  localStorage.setItem('useKg', kg);
+  // Re-render gym to update all inputs and hints
+  renderGym();
+}
+
 async function renderGymHistory() {
   const container = document.getElementById('gym-history');
   const logs = await api('gym_logs', 'GET', null,
@@ -521,7 +581,7 @@ async function renderGymHistory() {
     item.className = 'history-item';
     const exList = g.exercises
       .filter(e => e.weight_kg)
-      .map(e => `${e.exercise}: ${e.weight_kg}kg`)
+      .map(e => `${e.exercise}: ${toDisplay(e.weight_kg)}${unitLabel()}`)
       .join(' · ');
     item.innerHTML = `
       <div class="history-date">${g.date} — ${g.type}</div>
@@ -583,8 +643,8 @@ function renderCharts() {
 
   // Weight chart
   drawLineChart('chart-weight',
-    d.weeklyLogs.filter(w => w.weight_kg).map(w => ({ x: w.week_start.slice(5), y: w.weight_kg })),
-    'kg', '#4caf50');
+    d.weeklyLogs.filter(w => w.weight_kg).map(w => ({ x: w.week_start.slice(5), y: toDisplay(w.weight_kg) })),
+    unitLabel(), '#4caf50');
 
   // Skin score
   drawLineChart('chart-skin',
@@ -800,17 +860,19 @@ function renderProfileSettings() {
   }
 
   if (weightInput) {
-    // Load latest weight
+    const weightLabel = document.getElementById('profile-weight-label');
+    if (weightLabel) weightLabel.textContent = `Weight (${unitLabel()})`;
     api('weekly_logs', 'GET', null, '?order=week_start.desc&limit=1').then(rows => {
-      if (rows && rows[0]) weightInput.value = rows[0].weight_kg || '';
+      if (rows && rows[0] && rows[0].weight_kg) weightInput.value = toDisplay(rows[0].weight_kg);
     });
     weightInput.addEventListener('change', async e => {
+      const kg = toKg(e.target.value);
       const wk = getWeekStart(new Date());
       const existing = await api('weekly_logs', 'GET', null, `?week_start=eq.${wk}&limit=1`);
       if (existing && existing.length > 0) {
-        await api('weekly_logs', 'PATCH', { weight_kg: e.target.value }, `?week_start=eq.${wk}`);
+        await api('weekly_logs', 'PATCH', { weight_kg: kg }, `?week_start=eq.${wk}`);
       } else {
-        await api('weekly_logs', 'POST', { week_start: wk, weight_kg: e.target.value });
+        await api('weekly_logs', 'POST', { week_start: wk, weight_kg: kg });
       }
       showToast('Weight saved');
     });
