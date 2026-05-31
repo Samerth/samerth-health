@@ -809,46 +809,129 @@ function renderWelcomeBack() {
 }
 
 // ─── SETTINGS SCREEN ──────────────────────────────────────────────────────────
+// Track which accordion sections are open (default: all closed)
+const settingsOpen = { profile: false, habits: false, gym: false, shopping: false };
+
 function renderSettings() {
-  renderHabitList();
-  renderProfileSettings();
-  renderGymSettings();
-  renderShoppingSettings();
+  const screen = document.getElementById('screen-settings');
+  screen.innerHTML = '';
+
+  renderSettingsAccordion(screen, 'profile', '👤 Profile', renderProfilePanel);
+  renderSettingsAccordion(screen, 'habits', '📋 Habits', renderHabitsPanel);
+  renderSettingsAccordion(screen, 'gym',    '🏋️ Gym Plan', renderGymPanel);
+  renderSettingsAccordion(screen, 'shopping', '🛒 Shopping List', renderShoppingPanel);
 }
 
-function renderHabitList() {
-  const container = document.getElementById('habits-list');
-  container.innerHTML = '';
+function renderSettingsAccordion(parent, key, title, renderFn) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin:0 14px 10px;';
 
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent;';
+  header.innerHTML = `
+    <span style="font-family:Georgia,serif;font-size:15px;">${title}</span>
+    <svg class="acc-chevron" viewBox="0 0 20 20" fill="none" stroke="#aaa" stroke-width="2" width="16" height="16" style="transition:transform .2s;${settingsOpen[key] ? 'transform:rotate(180deg)' : ''}"><polyline points="5,8 10,13 15,8"/></svg>
+  `;
+
+  const body = document.createElement('div');
+  body.style.cssText = `margin-top:2px;${settingsOpen[key] ? '' : 'display:none'}`;
+  body.id = `acc-body-${key}`;
+
+  header.addEventListener('click', () => {
+    settingsOpen[key] = !settingsOpen[key];
+    body.style.display = settingsOpen[key] ? 'block' : 'none';
+    header.querySelector('.acc-chevron').style.transform = settingsOpen[key] ? 'rotate(180deg)' : '';
+    if (settingsOpen[key]) renderFn(body);
+  });
+
+  if (settingsOpen[key]) renderFn(body);
+
+  wrap.appendChild(header);
+  wrap.appendChild(body);
+  parent.appendChild(wrap);
+}
+
+function renderProfilePanel(container) {
+  container.innerHTML = `
+    <div style="background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">
+      <div class="profile-row" style="padding:10px 16px;">
+        <label style="font-size:14px;color:var(--muted);">Start date</label>
+        <input type="date" class="profile-input" id="profile-start">
+      </div>
+      <div class="profile-row" style="padding:10px 16px;border-bottom:none;">
+        <label id="profile-weight-label" style="font-size:14px;color:var(--muted);">Weight (${unitLabel()})</label>
+        <input type="number" class="profile-input" id="profile-weight" step="0.1" placeholder="—">
+      </div>
+    </div>`;
+  renderProfileSettings();
+}
+
+function renderHabitsPanel(container) {
+  container.innerHTML = '';
   BLOCK_ORDER.forEach(blockId => {
     const meta = BLOCK_META[blockId];
     const blockHabits = habits.filter(h => h.block === blockId)
       .sort((a,b) => (a.item_order||0) - (b.item_order||0));
 
-    const title = document.createElement('div');
-    title.className = 'section-title';
-    title.textContent = `${meta.icon} ${meta.label}`;
-    container.appendChild(title);
+    const label = document.createElement('div');
+    label.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.7px;text-transform:uppercase;padding:10px 4px 4px;';
+    label.textContent = `${meta.icon} ${meta.label}`;
+    container.appendChild(label);
 
-    blockHabits.forEach(h => {
-      const item = document.createElement('div');
-      item.className = 'settings-habit-item';
-      item.innerHTML = `
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:4px;';
+    blockHabits.forEach((h, i) => {
+      const row = document.createElement('div');
+      row.className = 'settings-habit-item';
+      row.style.cssText = `border-radius:0;${i < blockHabits.length-1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
+      row.innerHTML = `
         <div class="settings-habit-label">${h.label}</div>
-        <div class="settings-habit-block">${h.sub || ''}</div>
+        <div class="settings-habit-block" style="margin-right:4px">${h.sub || ''}</div>
+        ${h.status === 'buy' ? '<span class="status-badge badge-buy" style="margin-right:4px">BUY</span>' : ''}
+        ${h.status === 'rx' ? '<span class="status-badge badge-rx" style="margin-right:4px">RX</span>' : ''}
         <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
       `;
-      item.addEventListener('click', () => openEditHabit(h));
-      container.appendChild(item);
+      row.addEventListener('click', () => openEditHabit(h));
+      card.appendChild(row);
     });
+    container.appendChild(card);
   });
 
   const addBtn = document.createElement('button');
   addBtn.className = 'add-habit-btn';
+  addBtn.style.cssText = 'margin-top:6px;width:100%;';
   addBtn.innerHTML = `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="4" x2="10" y2="16"/><line x1="4" y1="10" x2="16" y2="10"/></svg> Add habit`;
   addBtn.addEventListener('click', () => openEditHabit(null));
   container.appendChild(addBtn);
 }
+
+function renderGymPanel(container) {
+  container.innerHTML = '';
+  const card = document.createElement('div');
+  card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  Object.entries(GYM_PLAN).forEach(([dow, plan], i) => {
+    const row = document.createElement('div');
+    row.style.cssText = `display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;${i < Object.keys(GYM_PLAN).length-1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
+    row.innerHTML = `
+      <span style="font-size:18px">🏋️</span>
+      <div style="flex:1">
+        <div style="font-size:14px">${plan.name}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">${days[dow]} · ${plan.exercises.length} exercises</div>
+      </div>
+      <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
+    `;
+    row.addEventListener('click', () => openGymModal(+dow, plan));
+    card.appendChild(row);
+  });
+  container.appendChild(card);
+}
+
+function renderShoppingPanel(container) {
+  renderShoppingSettings(container);
+}
+
+function renderHabitList() { /* legacy stub, used by openEditHabit */ renderSettings(); }
 
 function renderProfileSettings() {
   const startInput = document.getElementById('profile-start');
@@ -886,28 +969,8 @@ function updateHeaderDay() {
   document.querySelector('.header-day').textContent = `Day ${dayNumber()}/30`;
 }
 
-// ─── GYM SETTINGS ─────────────────────────────────────────────────────────────
-function renderGymSettings() {
-  const container = document.getElementById('gym-settings-list');
-  if (!container) return;
-  container.innerHTML = '';
-  Object.entries(GYM_PLAN).forEach(([dow, plan]) => {
-    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    const item = document.createElement('div');
-    item.className = 'settings-item';
-    item.innerHTML = `
-      <div class="settings-item-icon">🏋️</div>
-      <div style="flex:1">
-        <div class="settings-item-label">${plan.name}</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">${days[dow]} · ${plan.exercises.length} exercises</div>
-      </div>
-      <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
-    `;
-    item.style.cssText = 'margin-bottom:8px;cursor:pointer;';
-    item.addEventListener('click', () => openGymModal(+dow, plan));
-    container.appendChild(item);
-  });
-}
+// ─── GYM SETTINGS (legacy stub — rendering now via renderGymPanel) ─────────────
+function renderGymSettings() {}
 
 function openGymModal(dow, plan) {
   const overlay = document.getElementById('gym-modal-overlay');
@@ -961,47 +1024,79 @@ function closeGymModal() {
 }
 
 // ─── SHOPPING LIST ────────────────────────────────────────────────────────────
-// Stored as habits with block='shopping'. status='buy' = unpurchased, 'have' = bought.
+// Two kinds of items:
+//   1. Habit items with status='buy' (any block except 'shopping') — read-only, tap to open habit editor
+//   2. Standalone shopping items (block='shopping') — checkable + editable
 
-async function loadShoppingItems() {
-  return (habits.filter(h => h.block === 'shopping'));
-}
-
-function renderShoppingSettings() {
-  const container = document.getElementById('shopping-settings');
+function renderShoppingSettings(container) {
+  if (!container) container = document.getElementById('shopping-settings');
   if (!container) return;
   container.innerHTML = '';
 
-  const items = habits.filter(h => h.block === 'shopping');
-  const card = document.createElement('div');
-  card.className = 'card';
-  card.style.margin = '0 0 8px';
+  // Section 1: habit buy-items
+  const habitBuyItems = habits.filter(h => h.block !== 'shopping' && h.status === 'buy');
+  if (habitBuyItems.length > 0) {
+    const label = document.createElement('div');
+    label.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.7px;text-transform:uppercase;padding:8px 4px 4px;';
+    label.textContent = 'From habits (marked Need to Buy)';
+    container.appendChild(label);
 
-  if (items.length === 0) {
-    card.innerHTML = '<div class="empty" style="padding:16px">No items yet</div>';
-  } else {
-    items.forEach(h => {
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:10px;';
+    habitBuyItems.forEach((h, i) => {
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid #f0ede9;';
+      row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 14px;cursor:pointer;${i < habitBuyItems.length-1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
+      row.innerHTML = `
+        <span style="font-size:18px">💊</span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:14px;">${h.label}</div>
+          <div style="font-size:12px;color:var(--muted);">${BLOCK_META[h.block]?.label || h.block}</div>
+        </div>
+        <span class="status-badge badge-buy">BUY</span>
+        <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
+      `;
+      row.addEventListener('click', () => openEditHabit(h));
+      card.appendChild(row);
+    });
+    container.appendChild(card);
+  }
+
+  // Section 2: standalone shopping items
+  const label2 = document.createElement('div');
+  label2.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.7px;text-transform:uppercase;padding:8px 4px 4px;';
+  label2.textContent = 'My shopping list';
+  container.appendChild(label2);
+
+  const shopItems = habits.filter(h => h.block === 'shopping');
+  const card2 = document.createElement('div');
+  card2.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
+
+  if (shopItems.length === 0) {
+    card2.innerHTML = '<div style="padding:14px 16px;font-size:14px;color:var(--muted);">No items yet — add below</div>';
+  } else {
+    shopItems.forEach((h, i) => {
+      const row = document.createElement('div');
+      row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 14px;${i < shopItems.length-1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
       const bought = h.status === 'have';
       row.innerHTML = `
-        <div class="habit-check ${bought ? 'checked' : ''}" id="shop-check-${h.id}" style="flex-shrink:0;cursor:pointer;">${checkSVG()}</div>
+        <div class="habit-check ${bought ? 'checked' : ''}" id="shop-check-${h.id}" style="flex-shrink:0;cursor:pointer;width:26px;height:26px;">${checkSVG()}</div>
         <div style="flex:1;min-width:0;">
           <div style="font-size:14px;${bought ? 'text-decoration:line-through;color:var(--muted);' : ''}">${h.label}</div>
           ${h.sub ? `<div style="font-size:12px;color:var(--muted)">${h.sub}</div>` : ''}
         </div>
-        <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14" style="cursor:pointer" id="shop-edit-${h.id}"><polyline points="7,5 13,10 7,15"/></svg>
+        <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14" style="cursor:pointer;flex-shrink:0;" id="shop-edit-${h.id}"><polyline points="7,5 13,10 7,15"/></svg>
       `;
       row.querySelector(`#shop-check-${h.id}`).addEventListener('click', () => toggleShopItem(h));
       row.querySelector(`#shop-edit-${h.id}`).addEventListener('click', () => openShopModal(h));
-      card.appendChild(row);
+      card2.appendChild(row);
     });
   }
-  container.appendChild(card);
+  container.appendChild(card2);
 
   const addBtn = document.createElement('button');
   addBtn.className = 'add-habit-btn';
-  addBtn.innerHTML = `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="4" x2="10" y2="16"/><line x1="4" y1="10" x2="16" y2="10"/></svg> Add item`;
+  addBtn.style.cssText = 'margin-top:6px;width:100%;';
+  addBtn.innerHTML = `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="4" x2="10" y2="16"/><line x1="4" y1="10" x2="16" y2="10"/></svg> Add to shopping list`;
   addBtn.addEventListener('click', () => openShopModal(null));
   container.appendChild(addBtn);
 }
@@ -1010,7 +1105,7 @@ async function toggleShopItem(h) {
   const newStatus = h.status === 'buy' ? 'have' : 'buy';
   await api('habits', 'PATCH', { status: newStatus }, `?id=eq.${h.id}`);
   await loadHabits();
-  renderShoppingSettings();
+  renderShoppingSettings(document.getElementById('acc-body-shopping'));
   renderBuyCard();
 }
 
@@ -1054,7 +1149,7 @@ function openShopModal(item) {
       await api('habits', 'POST', payload);
     }
     await loadHabits();
-    renderShoppingSettings();
+    renderShoppingSettings(document.getElementById('acc-body-shopping'));
     renderBuyCard();
     closeShopModal();
     showToast(item ? 'Item updated' : 'Item added');
@@ -1065,7 +1160,7 @@ function openShopModal(item) {
     deleteBtn.onclick = async () => {
       await api('habits', 'DELETE', null, `?id=eq.${item.id}`);
       await loadHabits();
-      renderShoppingSettings();
+      renderShoppingSettings(document.getElementById('acc-body-shopping'));
       renderBuyCard();
       closeShopModal();
       showToast('Item removed');
@@ -1117,7 +1212,10 @@ function openEditHabit(habit) {
       }
       await loadHabits();
       renderToday();
-      renderHabitList();
+      const habBody = document.getElementById('acc-body-habits');
+      if (habBody) renderHabitsPanel(habBody);
+      const shopBody = document.getElementById('acc-body-shopping');
+      if (shopBody) renderShoppingSettings(shopBody);
       closeModal();
       showToast(habit ? 'Habit updated' : 'Habit added');
     } catch (e) { showToast('Error saving'); }
@@ -1130,7 +1228,8 @@ function openEditHabit(habit) {
       await api('habits', 'DELETE', null, `?id=eq.${habit.id}`);
       await loadHabits();
       renderToday();
-      renderHabitList();
+      const habBody = document.getElementById('acc-body-habits');
+      if (habBody) renderHabitsPanel(habBody);
       closeModal();
       showToast('Habit deleted');
     };
