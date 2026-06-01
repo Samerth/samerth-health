@@ -598,18 +598,26 @@ async function saveDay() {
 // ─── GYM SCREEN ───────────────────────────────────────────────────────────────
 async function renderGym() {
   const container = document.getElementById('gym-content');
+  const historyContainer = document.getElementById('gym-history');
+  historyContainer.innerHTML = '';
+  container.innerHTML = '';
   const gymDay = todayGym();
 
-  if (!gymDay) {
-    const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek()];
-    container.innerHTML = `
-      <div class="rest-day">
-        <div class="rest-icon">🛋️</div>
-        <p>Rest day — ${dow}</p>
-        <small>Next gym day: ${getNextGymDay()}</small>
-      </div>`;
-  } else {
-    await renderWorkout(gymDay, container);
+  try {
+    if (!gymDay) {
+      const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek()];
+      container.innerHTML = `
+        <div class="rest-day">
+          <div class="rest-icon">🛋️</div>
+          <p>Rest day — ${dow}</p>
+          <small>Next gym day: ${getNextGymDay()}</small>
+        </div>`;
+    } else {
+      await renderWorkout(gymDay, container);
+    }
+  } catch (e) {
+    console.error('renderGym failed', e);
+    container.innerHTML = '<div class="empty">Could not load workout — refresh the page</div>';
   }
 
   await renderGymHistory();
@@ -627,12 +635,19 @@ function getNextGymDay() {
 
 async function renderWorkout(gymDay, container) {
   // Load today's saved weights + last session weights for each exercise (progressive overload hint)
-  const [saved, prevLogs] = await Promise.all([
-    api('gym_logs', 'GET', null,
-      `?log_date=eq.${today()}&day_type=eq.${encodeURIComponent(gymDay.name)}&select=exercise,weight_kg`) || [],
-    api('gym_logs', 'GET', null,
-      `?log_date=neq.${today()}&day_type=eq.${encodeURIComponent(gymDay.name)}&order=log_date.desc&limit=60&select=exercise,weight_kg,log_date`),
-  ]);
+  let saved = [], prevLogs = [];
+  try {
+    [saved, prevLogs] = await Promise.all([
+      api('gym_logs', 'GET', null,
+        `?log_date=eq.${today()}&day_type=eq.${encodeURIComponent(gymDay.name)}&select=exercise,weight_kg`),
+      api('gym_logs', 'GET', null,
+        `?log_date=neq.${today()}&day_type=eq.${encodeURIComponent(gymDay.name)}&order=log_date.desc&limit=60&select=exercise,weight_kg,log_date`),
+    ]);
+  } catch (e) {
+    // Still show exercises if Supabase is unreachable
+  }
+  saved = saved || [];
+  prevLogs = prevLogs || [];
   const savedWeights = {};
   (saved || []).forEach(s => { savedWeights[s.exercise] = s.weight_kg; });
 
@@ -653,7 +668,7 @@ async function renderWorkout(gymDay, container) {
   const card = document.createElement('div');
   card.className = 'card';
 
-  gymDay.exercises.forEach(ex => {
+  gymDay.exercises.forEach((ex, idx) => {
     const key = ex.name;
     const savedKg = savedWeights[key];
     const displayVal = savedKg ? toDisplay(savedKg) : '';
@@ -663,18 +678,18 @@ async function renderWorkout(gymDay, container) {
     const item = document.createElement('div');
     item.className = 'exercise-item';
     item.innerHTML = `
-      <div class="exercise-done ${gymState[key].done ? 'done' : ''}" id="gym-${key}">${checkSVG()}</div>
+      <div class="exercise-done ${gymState[key].done ? 'done' : ''}" data-idx="${idx}">${checkSVG()}</div>
       <div class="exercise-info">
         <div class="exercise-name">${ex.name}</div>
         <div class="exercise-sets">${ex.sets}×${ex.reps} <span style="color:var(--muted);font-size:11px">· ${hint}</span></div>
       </div>
-      <input type="number" class="weight-input" placeholder="${unitLabel()}" value="${displayVal}" id="weight-${key}" min="0" step="0.5">
+      <input type="number" class="weight-input" placeholder="${unitLabel()}" value="${displayVal}" min="0" step="0.5">
     `;
-    item.querySelector(`#gym-${key}`).addEventListener('click', () => {
+    item.querySelector('.exercise-done').addEventListener('click', function() {
       gymState[key].done = !gymState[key].done;
-      item.querySelector(`#gym-${key}`).classList.toggle('done', gymState[key].done);
+      this.classList.toggle('done', gymState[key].done);
     });
-    item.querySelector(`#weight-${key}`).addEventListener('change', async e => {
+    item.querySelector('.weight-input').addEventListener('change', async e => {
       const kg = toKg(e.target.value);
       gymState[key].weight = kg;
       await saveGymExercise(gymDay.name, ex, kg);
@@ -715,12 +730,12 @@ async function renderWorkout(gymDay, container) {
     row.className = 'exercise-item';
     row.style.borderBottom = idx < PHYSIO_EXERCISES.length - 1 ? '1px solid #f0ede9' : 'none';
     row.innerHTML = `
-      <div class="exercise-done ${gymState[key].done ? 'done' : ''}" id="pgym-${idx}">${checkSVG()}</div>
+      <div class="exercise-done ${gymState[key].done ? 'done' : ''}">${checkSVG()}</div>
       <div class="exercise-info">
         <div class="exercise-name">${ex.name}</div>
         <div class="exercise-sets">${setsLabel}</div>
       </div>`;
-    row.querySelector(`#pgym-${idx}`).addEventListener('click', function() {
+    row.querySelector('.exercise-done').addEventListener('click', function() {
       gymState[key].done = !gymState[key].done;
       this.classList.toggle('done', gymState[key].done);
       // Update count badge
