@@ -73,10 +73,16 @@ function getStartDate() {
 
 function dayNumber() {
   const [y, m, d] = getStartDate().split('-').map(Number);
-  const start = new Date(y, m - 1, d);         // local midnight
-  const todayLocal = new Date();
-  const todayMidnight = new Date(todayLocal.getFullYear(), todayLocal.getMonth(), todayLocal.getDate());
-  return Math.max(1, Math.floor((todayMidnight - start) / 86400000) + 1);
+  const start = new Date(y, m - 1, d);
+  const todayMidnight = new Date();
+  todayMidnight.setHours(0, 0, 0, 0);
+  return Math.floor((todayMidnight - start) / 86400000) + 1; // negative = future
+}
+
+function dayLabel() {
+  const n = dayNumber();
+  if (n < 1) return `Starts in ${1 - n} day${1 - n === 1 ? '' : 's'}`;
+  return `Day ${n}/30`;
 }
 
 function dayOfWeek() { return new Date().getDay(); } // 0=Sun
@@ -1134,7 +1140,7 @@ function renderNotifsPanel(container) {
 }
 
 function updateHeaderDay() {
-  document.querySelector('.header-day').textContent = `Day ${dayNumber()}/30`;
+  document.querySelector('.header-day').textContent = dayLabel();
 }
 
 // ─── GYM SETTINGS (legacy stub — rendering now via renderGymPanel) ─────────────
@@ -1429,7 +1435,7 @@ function setupNav() {
   // Header
   const dayEl = document.querySelector('.header-day');
   const dateEl = document.querySelector('.header-date');
-  dayEl.textContent = `Day ${dayNumber()}/30`;
+  dayEl.textContent = dayLabel();
   dateEl.textContent = new Date().toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
