@@ -1,7 +1,7 @@
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://ygqfhuuomdunetpvwhrj.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlncWZodXVvbWR1bmV0cHZ3aHJqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNDY5NjgsImV4cCI6MjA5NTgyMjk2OH0.X-yHD2uC1ua1troWyNEOmUobFVyhbbXyNmL_oBhL1A0';
-const START_DATE = localStorage.getItem('startDate') || '2026-05-31';
+const DEFAULT_START = '2026-06-01'; // Day 1
 
 // ─── SUPABASE CLIENT ───────────────────────────────────────────────────────────
 const { createClient } = supabase;
@@ -67,10 +67,16 @@ function today() {
   return new Date().toISOString().split('T')[0];
 }
 
+function getStartDate() {
+  return localStorage.getItem('startDate') || DEFAULT_START;
+}
+
 function dayNumber() {
-  const start = new Date(START_DATE);
-  const now = new Date();
-  return Math.max(1, Math.floor((now - start) / 86400000) + 1);
+  const [y, m, d] = getStartDate().split('-').map(Number);
+  const start = new Date(y, m - 1, d);         // local midnight
+  const todayLocal = new Date();
+  const todayMidnight = new Date(todayLocal.getFullYear(), todayLocal.getMonth(), todayLocal.getDate());
+  return Math.max(1, Math.floor((todayMidnight - start) / 86400000) + 1);
 }
 
 function dayOfWeek() { return new Date().getDay(); } // 0=Sun
@@ -938,10 +944,11 @@ function renderProfileSettings() {
   const weightInput = document.getElementById('profile-weight');
 
   if (startInput) {
-    startInput.value = localStorage.getItem('startDate') || START_DATE;
+    startInput.value = getStartDate();
     startInput.addEventListener('change', e => {
       localStorage.setItem('startDate', e.target.value);
       updateHeaderDay();
+      showToast('Start date saved');
     });
   }
 
