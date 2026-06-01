@@ -13,8 +13,18 @@ let todayChecks = {}; // habitId -> boolean
 let ratings = { skin: 0, energy: 0, hip: 0, knee: 0, back: 0, weed: null, notes: '', sleep: '' };
 let gymState = {}; // exerciseName -> {done, weight}
 let progressData = {};
-let useKg = localStorage.getItem('useKg') !== 'false'; // default kg
-let savingChecks = {}; // habitId -> in-flight save promise
+let useKg = localStorage.getItem('useKg') !== 'false';
+let savingChecks = {};
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+function getHiddenBlocks() {
+  try { return JSON.parse(localStorage.getItem('hiddenBlocks')) || []; } catch { return []; }
+}
+function setHiddenBlocks(arr) { localStorage.setItem('hiddenBlocks', JSON.stringify(arr)); }
+
+function getWaterGoal() { return parseInt(localStorage.getItem('waterGoal')) || 8; }
+function getWaterCount() { return parseInt(localStorage.getItem('water-' + today())) || 0; }
+function setWaterCount(n) { localStorage.setItem('water-' + today(), n); }
 
 // ─── GYM PLAN ─────────────────────────────────────────────────────────────────
 const GYM_PLAN = {
@@ -52,6 +62,19 @@ const GYM_PLAN = {
   ]},
 };
 
+const PHYSIO_EXERCISES = [
+  { name: 'Banded clamshells',       sets: 3, reps: 10  },
+  { name: 'Dead bug',                sets: 3, reps: 10  },
+  { name: 'Hip CARs',                sets: 3, reps: 10, note: 'each side' },
+  { name: 'Standing hip abduction',  sets: 3, reps: 10  },
+  { name: '90/90 hip stretch',       sets: 2, reps: null, note: '2 min each' },
+  { name: 'Glute bridges',           sets: 3, reps: 10  },
+  { name: 'Wall angels',             sets: 3, reps: 10  },
+  { name: 'Right QL stretch',        sets: 3, reps: null, note: '60 sec' },
+  { name: 'Cervical retraction',     sets: 3, reps: 10  },
+  { name: 'Pelvic floor / kegels',   sets: 3, reps: 10  },
+];
+
 const BLOCK_META = {
   morning: { icon: '🌅', label: 'Morning', time: '7am', freq: 'daily' },
   midday:  { icon: '☀️', label: 'Midday',  time: '12:30pm', freq: 'weekdays' },
@@ -60,7 +83,7 @@ const BLOCK_META = {
   bedtime: { icon: '🛌', label: 'Bedtime', time: '10pm',   freq: 'daily' },
 };
 
-const BLOCK_ORDER = ['morning','midday','physio','evening','bedtime'];
+const BLOCK_ORDER = ['morning','midday','evening','bedtime']; // physio moved to gym screen
 
 // ─── UTILS ─────────────────────────────────────────────────────────────────────
 function today() {
@@ -247,6 +270,60 @@ function toKg(val) {
 }
 function unitLabel() { return useKg ? 'kg' : 'lbs'; }
 
+// ─── WATER WIDGET ─────────────────────────────────────────────────────────────
+function renderWaterWidget() {
+  const goal = getWaterGoal();
+  const count = getWaterCount();
+  const pct = Math.min(count / goal, 1);
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.id = 'water-card';
+  card.style.cssText = 'margin:10px 14px;padding:14px 16px;';
+
+  card.innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px;">
+      <div style="position:relative;width:54px;height:54px;flex-shrink:0;">
+        <svg viewBox="0 0 54 54" width="54" height="54">
+          <circle cx="27" cy="27" r="23" fill="none" stroke="#e8f4fd" stroke-width="5"/>
+          <circle cx="27" cy="27" r="23" fill="none" stroke="#2196f3" stroke-width="5"
+            stroke-dasharray="${(2 * Math.PI * 23).toFixed(1)}"
+            stroke-dashoffset="${((1 - pct) * 2 * Math.PI * 23).toFixed(1)}"
+            stroke-linecap="round"
+            transform="rotate(-90 27 27)"/>
+        </svg>
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;color:#1565c0;">${count}</div>
+      </div>
+      <div style="flex:1;">
+        <div style="font-family:Georgia,serif;font-size:14px;margin-bottom:4px;">💧 Water</div>
+        <div style="font-size:12px;color:var(--muted);">${count} of ${goal} glasses${count >= goal ? ' · ✓ Goal reached!' : ''}</div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+          ${Array.from({length: goal}, (_, i) =>
+            `<div style="width:18px;height:18px;border-radius:50%;background:${i < count ? '#2196f3' : '#e8f4fd'};border:1.5px solid ${i < count ? '#1976d2' : '#b3d9f5'};"></div>`
+          ).join('')}
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <button id="water-add" style="width:36px;height:36px;border-radius:50%;border:none;background:#2196f3;color:#fff;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;-webkit-tap-highlight-color:transparent;">+</button>
+        <button id="water-sub" style="width:36px;height:36px;border-radius:50%;border:1.5px solid var(--border);background:#fff;color:var(--muted);font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;-webkit-tap-highlight-color:transparent;">−</button>
+      </div>
+    </div>`;
+
+  card.querySelector('#water-add').addEventListener('click', () => {
+    setWaterCount(Math.min(getWaterCount() + 1, 20));
+    const existing = document.getElementById('water-card');
+    const newWidget = renderWaterWidget();
+    existing.replaceWith(newWidget);
+  });
+  card.querySelector('#water-sub').addEventListener('click', () => {
+    setWaterCount(Math.max(getWaterCount() - 1, 0));
+    const existing = document.getElementById('water-card');
+    const newWidget = renderWaterWidget();
+    existing.replaceWith(newWidget);
+  });
+  return card;
+}
+
 // ─── TODAY SCREEN ──────────────────────────────────────────────────────────────
 function renderToday() {
   const container = document.getElementById('today-blocks');
@@ -269,11 +346,16 @@ function renderToday() {
     container.appendChild(buyCard);
   }
 
+  // Water tracker widget
+  container.appendChild(renderWaterWidget());
+
   const now = new Date();
   const hour = now.getHours() + now.getMinutes() / 60;
   const currentBlock = getCurrentBlock(hour);
+  const hidden = getHiddenBlocks();
 
   BLOCK_ORDER.forEach(blockId => {
+    if (hidden.includes(blockId)) return; // user hid this block
     const meta = BLOCK_META[blockId];
     const blockHabits = habits.filter(h => h.block === blockId);
 
@@ -602,9 +684,69 @@ async function renderWorkout(gymDay, container) {
 
   container.appendChild(card);
 
+  // ─── Physio section (collapsible) ───
+  const physioOpen = localStorage.getItem('physioOpen') !== 'false';
+  const physioWrap = document.createElement('div');
+  physioWrap.style.cssText = 'margin:10px 14px 0;';
+
+  const physioHeader = document.createElement('div');
+  physioHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;-webkit-tap-highlight-color:transparent;';
+  physioHeader.innerHTML = `
+    <span style="font-family:Georgia,serif;font-size:14px;">💪 Physio warmup</span>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span id="physio-count" style="font-size:12px;color:var(--muted);">${PHYSIO_EXERCISES.length} exercises</span>
+      <svg id="physio-chevron" viewBox="0 0 20 20" fill="none" stroke="#aaa" stroke-width="2" width="16" height="16" style="transition:transform .2s;${physioOpen ? 'transform:rotate(180deg)' : ''}"><polyline points="5,8 10,13 15,8"/></svg>
+    </div>`;
+
+  const physioBody = document.createElement('div');
+  physioBody.id = 'physio-body';
+  physioBody.style.cssText = `margin-top:2px;${physioOpen ? '' : 'display:none'}`;
+
+  const physioCard = document.createElement('div');
+  physioCard.className = 'card';
+  physioCard.style.margin = '0';
+
+  let physioChecked = 0;
+  PHYSIO_EXERCISES.forEach((ex, idx) => {
+    const key = `physio-${ex.name}`;
+    if (!gymState[key]) gymState[key] = { done: false };
+    const setsLabel = ex.reps ? `${ex.sets}×${ex.reps}${ex.note ? ' · ' + ex.note : ''}` : `${ex.sets} sets · ${ex.note}`;
+    const row = document.createElement('div');
+    row.className = 'exercise-item';
+    row.style.borderBottom = idx < PHYSIO_EXERCISES.length - 1 ? '1px solid #f0ede9' : 'none';
+    row.innerHTML = `
+      <div class="exercise-done ${gymState[key].done ? 'done' : ''}" id="pgym-${idx}">${checkSVG()}</div>
+      <div class="exercise-info">
+        <div class="exercise-name">${ex.name}</div>
+        <div class="exercise-sets">${setsLabel}</div>
+      </div>`;
+    row.querySelector(`#pgym-${idx}`).addEventListener('click', function() {
+      gymState[key].done = !gymState[key].done;
+      this.classList.toggle('done', gymState[key].done);
+      // Update count badge
+      const doneCount = PHYSIO_EXERCISES.filter((_, i) => gymState[`physio-${PHYSIO_EXERCISES[i].name}`]?.done).length;
+      document.getElementById('physio-count').textContent =
+        doneCount > 0 ? `${doneCount}/${PHYSIO_EXERCISES.length}` : `${PHYSIO_EXERCISES.length} exercises`;
+    });
+    physioCard.appendChild(row);
+  });
+
+  physioBody.appendChild(physioCard);
+  physioHeader.addEventListener('click', () => {
+    const open = physioBody.style.display === 'none';
+    physioBody.style.display = open ? 'block' : 'none';
+    physioHeader.querySelector('#physio-chevron').style.transform = open ? 'rotate(180deg)' : '';
+    localStorage.setItem('physioOpen', open);
+  });
+
+  physioWrap.appendChild(physioHeader);
+  physioWrap.appendChild(physioBody);
+  container.appendChild(physioWrap);
+
   const btn = document.createElement('button');
   btn.className = 'log-btn';
   btn.textContent = 'Save Workout';
+  btn.style.marginTop = '10px';
   btn.addEventListener('click', () => saveWorkout(gymDay));
   container.appendChild(btn);
 }
@@ -939,25 +1081,62 @@ function renderProfilePanel(container) {
         <label style="font-size:14px;color:var(--muted);">Start date</label>
         <input type="date" class="profile-input" id="profile-start">
       </div>
-      <div class="profile-row" style="padding:10px 16px;border-bottom:none;">
+      <div class="profile-row" style="padding:10px 16px;">
         <label id="profile-weight-label" style="font-size:14px;color:var(--muted);">Weight (${unitLabel()})</label>
         <input type="number" class="profile-input" id="profile-weight" step="0.1" placeholder="—">
       </div>
+      <div class="profile-row" style="padding:10px 16px;border-bottom:none;">
+        <label style="font-size:14px;color:var(--muted);">💧 Water goal (glasses)</label>
+        <input type="number" class="profile-input" id="profile-water" min="1" max="20" value="${getWaterGoal()}" style="width:80px;">
+      </div>
     </div>`;
   renderProfileSettings();
+  const waterInput = document.getElementById('profile-water');
+  if (waterInput) {
+    waterInput.addEventListener('change', e => {
+      localStorage.setItem('waterGoal', e.target.value);
+      const wc = document.getElementById('water-card');
+      if (wc) wc.replaceWith(renderWaterWidget());
+      showToast('Water goal updated');
+    });
+  }
 }
 
 function renderHabitsPanel(container) {
   container.innerHTML = '';
+  const hidden = getHiddenBlocks();
+
   BLOCK_ORDER.forEach(blockId => {
     const meta = BLOCK_META[blockId];
     const blockHabits = habits.filter(h => h.block === blockId)
       .sort((a,b) => (a.item_order||0) - (b.item_order||0));
+    const isHidden = hidden.includes(blockId);
 
-    const label = document.createElement('div');
-    label.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.7px;text-transform:uppercase;padding:10px 4px 4px;';
-    label.textContent = `${meta.icon} ${meta.label}`;
-    container.appendChild(label);
+    const labelRow = document.createElement('div');
+    labelRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:10px 4px 4px;';
+    labelRow.innerHTML = `
+      <span style="font-size:11px;color:var(--muted);letter-spacing:.7px;text-transform:uppercase;">${meta.icon} ${meta.label}</span>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--muted);">
+        <span>${isHidden ? 'Hidden' : 'Visible'}</span>
+        <div style="position:relative;width:36px;height:20px;">
+          <input type="checkbox" id="vis-${blockId}" ${isHidden ? '' : 'checked'} style="opacity:0;width:0;height:0;">
+          <span style="position:absolute;inset:0;border-radius:20px;background:${isHidden ? '#ccc' : 'var(--green)'};transition:.2s;cursor:pointer;">
+            <span style="position:absolute;width:14px;height:14px;background:#fff;border-radius:50%;top:3px;left:${isHidden ? '3px' : '19px'};transition:.2s;"></span>
+          </span>
+        </div>
+      </label>`;
+
+    labelRow.querySelector(`#vis-${blockId}`).addEventListener('change', e => {
+      const h2 = getHiddenBlocks();
+      if (e.target.checked) {
+        setHiddenBlocks(h2.filter(b => b !== blockId));
+      } else {
+        setHiddenBlocks([...h2, blockId]);
+      }
+      renderToday();
+      renderHabitsPanel(container); // refresh toggles
+    });
+    container.appendChild(labelRow);
 
     const card = document.createElement('div');
     card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:4px;';
