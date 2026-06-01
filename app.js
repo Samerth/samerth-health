@@ -117,6 +117,69 @@ function checkSVG() {
   return `<svg viewBox="0 0 14 14"><polyline points="2,7 6,11 12,3"/></svg>`;
 }
 
+// ─── NOTIFICATIONS ────────────────────────────────────────────────────────────
+const NOTIF_DEFAULTS = {
+  morning:  { enabled: true,  time: '07:00', label: '🌅 Morning routine',   body: 'Time for your morning habits' },
+  midday:   { enabled: true,  time: '12:30', label: '☀️ Midday check-in',   body: 'Lunch, Zinc & Creatine time' },
+  physio:   { enabled: true,  time: '17:00', label: '💪 Physio session',    body: 'Don\'t skip your physio today' },
+  evening:  { enabled: true,  time: '19:30', label: '🌙 Evening routine',   body: 'Skincare & evening habits' },
+  bedtime:  { enabled: true,  time: '22:00', label: '🛌 Bedtime',           body: 'Wind down & rate your day' },
+  logday:   { enabled: true,  time: '21:30', label: '📋 Log your day',      body: 'Don\'t forget to tap Log Day' },
+};
+
+let notifSchedules = {}; // key -> setTimeout id
+
+function getNotifSettings() {
+  try {
+    return JSON.parse(localStorage.getItem('notifSettings')) || { ...NOTIF_DEFAULTS };
+  } catch { return { ...NOTIF_DEFAULTS }; }
+}
+
+function saveNotifSettings(s) {
+  localStorage.setItem('notifSettings', JSON.stringify(s));
+}
+
+async function requestNotifPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  const result = await Notification.requestPermission();
+  return result === 'granted';
+}
+
+function msUntil(timeStr) {
+  const [h, m] = timeStr.split(':').map(Number);
+  const now = new Date();
+  const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
+  if (target <= now) target.setDate(target.getDate() + 1); // tomorrow if past
+  return target - now;
+}
+
+async function scheduleNotifications() {
+  if (Notification.permission !== 'granted') return;
+
+  // Clear existing schedules
+  Object.values(notifSchedules).forEach(id => clearTimeout(id));
+  notifSchedules = {};
+
+  const sw = await navigator.serviceWorker?.ready;
+  const settings = getNotifSettings();
+
+  Object.entries(settings).forEach(([key, cfg]) => {
+    if (!cfg.enabled) return;
+    const delay = msUntil(cfg.time);
+    notifSchedules[key] = setTimeout(() => {
+      if (sw) {
+        sw.active.postMessage({ type: 'SHOW_NOTIFICATION', title: cfg.label, body: cfg.body, tag: key });
+      } else {
+        new Notification(cfg.label, { body: cfg.body });
+      }
+      // Reschedule for tomorrow
+      notifSchedules[key] = setTimeout(() => scheduleNotifications(), 60000);
+    }, delay);
+  });
+}
+
 // ─── INIT ──────────────────────────────────────────────────────────────────────
 async function init() {
   registerSW();
@@ -125,6 +188,11 @@ async function init() {
   renderToday();
   setupNav();
   document.getElementById('log-btn').addEventListener('click', saveDay);
+  // Request notification permission after a short delay (not on first gesture)
+  setTimeout(async () => {
+    const granted = await requestNotifPermission();
+    if (granted) scheduleNotifications();
+  }, 3000);
 }
 
 function registerSW() {
@@ -816,16 +884,17 @@ function renderWelcomeBack() {
 
 // ─── SETTINGS SCREEN ──────────────────────────────────────────────────────────
 // Track which accordion sections are open (default: all closed)
-const settingsOpen = { profile: false, habits: false, gym: false, shopping: false };
+const settingsOpen = { profile: false, habits: false, gym: false, shopping: false, notifs: false };
 
 function renderSettings() {
   const screen = document.getElementById('screen-settings');
   screen.innerHTML = '';
 
-  renderSettingsAccordion(screen, 'profile', '👤 Profile', renderProfilePanel);
-  renderSettingsAccordion(screen, 'habits', '📋 Habits', renderHabitsPanel);
-  renderSettingsAccordion(screen, 'gym',    '🏋️ Gym Plan', renderGymPanel);
-  renderSettingsAccordion(screen, 'shopping', '🛒 Shopping List', renderShoppingPanel);
+  renderSettingsAccordion(screen, 'profile',  '👤 Profile',        renderProfilePanel);
+  renderSettingsAccordion(screen, 'habits',   '📋 Habits',         renderHabitsPanel);
+  renderSettingsAccordion(screen, 'gym',      '🏋️ Gym Plan',       renderGymPanel);
+  renderSettingsAccordion(screen, 'shopping', '🛒 Shopping List',  renderShoppingPanel);
+  renderSettingsAccordion(screen, 'notifs',   '🔔 Notifications',  renderNotifsPanel);
 }
 
 function renderSettingsAccordion(parent, key, title, renderFn) {
@@ -970,6 +1039,98 @@ function renderProfileSettings() {
       showToast('Weight saved');
     });
   }
+}
+
+function renderNotifsPanel(container) {
+  container.innerHTML = '';
+  const permission = 'Notification' in window ? Notification.permission : 'unsupported';
+  const settings = getNotifSettings();
+
+  // Permission status banner
+  const banner = document.createElement('div');
+  banner.style.cssText = 'padding:12px 16px;margin-bottom:8px;border-radius:var(--radius);font-size:13px;';
+
+  if (permission === 'granted') {
+    banner.style.cssText += 'background:#e8f5e9;color:#2e7d32;';
+    banner.textContent = '✓ Notifications enabled';
+  } else if (permission === 'denied') {
+    banner.style.cssText += 'background:#ffeaea;color:#c0392b;';
+    banner.innerHTML = '✗ Notifications blocked — enable in your phone\'s browser settings';
+  } else if (permission === 'unsupported') {
+    banner.style.cssText += 'background:#f5f5f5;color:#888;';
+    banner.textContent = 'Notifications not supported in this browser';
+  } else {
+    banner.style.cssText += 'background:#fff8e7;color:#8a6500;cursor:pointer;';
+    banner.textContent = '⚠ Tap to enable notifications';
+    banner.addEventListener('click', async () => {
+      const ok = await requestNotifPermission();
+      if (ok) { scheduleNotifications(); renderNotifsPanel(container); showToast('Notifications enabled'); }
+    });
+  }
+  container.appendChild(banner);
+
+  // Per-reminder rows
+  const card = document.createElement('div');
+  card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
+
+  const NOTIF_ORDER = ['morning','midday','physio','evening','bedtime','logday'];
+  NOTIF_ORDER.forEach((key, i) => {
+    const cfg = settings[key] || NOTIF_DEFAULTS[key];
+    const row = document.createElement('div');
+    row.style.cssText = `display:flex;align-items:center;gap:12px;padding:12px 16px;${i < NOTIF_ORDER.length-1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
+    row.innerHTML = `
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14px;">${cfg.label}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">${cfg.body}</div>
+      </div>
+      <input type="time" value="${cfg.time}" id="ntime-${key}" style="border:1.5px solid var(--border);border-radius:7px;padding:4px 7px;font-size:13px;font-family:inherit;background:#fff;color:var(--text);width:88px;">
+      <label style="position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0;">
+        <input type="checkbox" id="ntog-${key}" ${cfg.enabled ? 'checked' : ''} style="opacity:0;width:0;height:0;">
+        <span id="nslider-${key}" style="position:absolute;cursor:pointer;inset:0;border-radius:24px;transition:.2s;background:${cfg.enabled ? 'var(--green)' : '#ccc'};">
+          <span style="position:absolute;width:18px;height:18px;background:#fff;border-radius:50%;top:3px;left:${cfg.enabled ? '21px' : '3px'};transition:.2s;"></span>
+        </span>
+      </label>
+    `;
+
+    const toggle = row.querySelector(`#ntog-${key}`);
+    const slider = row.querySelector(`#nslider-${key}`);
+    const dot = slider.querySelector('span');
+    const timeInput = row.querySelector(`#ntime-${key}`);
+
+    toggle.addEventListener('change', () => {
+      settings[key] = { ...cfg, enabled: toggle.checked };
+      slider.style.background = toggle.checked ? 'var(--green)' : '#ccc';
+      dot.style.left = toggle.checked ? '21px' : '3px';
+      saveNotifSettings(settings);
+      scheduleNotifications();
+    });
+
+    timeInput.addEventListener('change', () => {
+      settings[key] = { ...settings[key], time: timeInput.value };
+      saveNotifSettings(settings);
+      scheduleNotifications();
+      showToast('Reminder time updated');
+    });
+
+    card.appendChild(row);
+  });
+  container.appendChild(card);
+
+  // Test button
+  const testBtn = document.createElement('button');
+  testBtn.style.cssText = 'margin-top:8px;width:100%;padding:12px;background:none;border:1.5px dashed var(--border);border-radius:var(--radius);font-size:14px;color:var(--muted);cursor:pointer;font-family:inherit;';
+  testBtn.textContent = '🔔 Send test notification';
+  testBtn.addEventListener('click', async () => {
+    const ok = await requestNotifPermission();
+    if (!ok) { showToast('Notifications not permitted'); return; }
+    const sw = await navigator.serviceWorker?.ready;
+    if (sw) {
+      sw.active.postMessage({ type: 'SHOW_NOTIFICATION', title: 'Samerth Health', body: 'Notifications are working ✓', tag: 'test' });
+    } else {
+      new Notification('Samerth Health', { body: 'Notifications are working ✓' });
+    }
+  });
+  container.appendChild(testBtn);
 }
 
 function updateHeaderDay() {
