@@ -11,7 +11,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let habits = [];
 let todayChecks = {}; // habitId -> boolean
 let ratings = { skin: 0, energy: 0, hip: 0, knee: 0, back: 0, weed: null, notes: '', sleep: '' };
-let gymState = {}; // exerciseName -> {done, weight}
+let gymState = {}; // exerciseName -> { sets: [{weight_kg, reps}] } | physio key -> { done }
 let progressData = {};
 let useKg = localStorage.getItem('useKg') !== 'false';
 let savingChecks = {};
@@ -27,8 +27,8 @@ function getWaterCount() { return parseInt(localStorage.getItem('water-' + today
 function setWaterCount(n) { localStorage.setItem('water-' + today(), n); }
 
 // ─── GYM PLAN ─────────────────────────────────────────────────────────────────
-const GYM_PLAN = {
-  1: { name: 'Day A — Lower Posture', exercises: [
+const DEFAULT_GYM_TEMPLATES = {
+  a: { name: 'Day A — Lower Posture', exercises: [
     { name: 'Glute bridges', sets: 3, reps: 12 },
     { name: 'Banded clamshells', sets: 3, reps: 10 },
     { name: 'Cable hip abduction', sets: 3, reps: 12 },
@@ -36,7 +36,7 @@ const GYM_PLAN = {
     { name: 'Leg press', sets: 3, reps: 12 },
     { name: 'Seated leg curl', sets: 3, reps: 12 },
   ]},
-  2: { name: 'Day B — Upper Push', exercises: [
+  b: { name: 'Day B — Upper Push', exercises: [
     { name: 'Incline DB press', sets: 3, reps: 12 },
     { name: 'Cable fly', sets: 3, reps: 12 },
     { name: 'DB shoulder press', sets: 3, reps: 12 },
@@ -44,7 +44,7 @@ const GYM_PLAN = {
     { name: 'Tricep pushdown', sets: 3, reps: 12 },
     { name: 'Wall angels', sets: 3, reps: 10 },
   ]},
-  4: { name: 'Day C — Lower Strength', exercises: [
+  c: { name: 'Day C — Lower Strength', exercises: [
     { name: 'Goblet squat', sets: 3, reps: 12 },
     { name: 'Walking lunges', sets: 3, reps: 10 },
     { name: 'Hip thrust', sets: 3, reps: 12 },
@@ -52,7 +52,7 @@ const GYM_PLAN = {
     { name: 'Calf raise', sets: 3, reps: 15 },
     { name: 'Dead bug', sets: 3, reps: 10 },
   ]},
-  5: { name: 'Day D — Upper Pull', exercises: [
+  d: { name: 'Day D — Upper Pull', exercises: [
     { name: 'Cable row', sets: 3, reps: 12 },
     { name: 'Lat pulldown', sets: 3, reps: 12 },
     { name: 'Single arm row', sets: 3, reps: 12 },
@@ -62,18 +62,120 @@ const GYM_PLAN = {
   ]},
 };
 
+const DEFAULT_GYM_SCHEDULE = { 1: 'a', 2: 'b', 4: 'c', 5: 'd' }; // Mon, Tue, Thu, Fri
+
+function loadGymConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('gymConfig'));
+    if (saved?.templates && saved?.schedule) return saved;
+  } catch {}
+  // migrate legacy gymPlan (keyed by weekday number)
+  try {
+    const old = JSON.parse(localStorage.getItem('gymPlan'));
+    if (old?.['1']) {
+      return {
+        templates: { a: old['1'], b: old['2'], c: old['4'], d: old['5'] },
+        schedule: { 1: 'a', 2: 'b', 4: 'c', 5: 'd' },
+      };
+    }
+  } catch {}
+  return {
+    templates: JSON.parse(JSON.stringify(DEFAULT_GYM_TEMPLATES)),
+    schedule: { ...DEFAULT_GYM_SCHEDULE },
+  };
+}
+
+let gymConfig = loadGymConfig();
+
+function saveGymConfig() {
+  localStorage.setItem('gymConfig', JSON.stringify(gymConfig));
+}
+
+function getGymOverride() {
+  return localStorage.getItem('gymOverride-' + today()) || null;
+}
+
+function setGymOverride(templateId) {
+  localStorage.setItem('gymOverride-' + today(), templateId);
+}
+
+function clearGymOverride() {
+  localStorage.removeItem('gymOverride-' + today());
+}
+
+function getScheduledTemplateId() {
+  return gymConfig.schedule[dayOfWeek()] || null;
+}
+
+function getScheduledGym() {
+  const id = getScheduledTemplateId();
+  return id ? gymConfig.templates[id] : null;
+}
+
+function todayGym() {
+  const override = getGymOverride();
+  if (override && gymConfig.templates[override]) return gymConfig.templates[override];
+  return getScheduledGym();
+}
+
+function getTemplateShortName(name) {
+  return name.split('—')[0].trim();
+}
+
+function getAllTemplates() {
+  return Object.entries(gymConfig.templates).map(([id, plan]) => ({ id, ...plan }));
+}
+
+function getTemplateDay(templateId) {
+  const entry = Object.entries(gymConfig.schedule).find(([, id]) => id === templateId);
+  return entry ? +entry[0] : null;
+}
+
+function setTemplateDay(templateId, dow) {
+  Object.keys(gymConfig.schedule).forEach(d => {
+    if (gymConfig.schedule[d] === templateId) delete gymConfig.schedule[d];
+  });
+  if (dow !== '' && dow != null) {
+    delete gymConfig.schedule[dow];
+    gymConfig.schedule[dow] = templateId;
+  }
+  saveGymConfig();
+}
+
+const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+// Warmup exercises — shown first; skips any already in today's main workout
 const PHYSIO_EXERCISES = [
-  { name: 'Banded clamshells',       sets: 3, reps: 10  },
-  { name: 'Dead bug',                sets: 3, reps: 10  },
   { name: 'Hip CARs',                sets: 3, reps: 10, note: 'each side' },
-  { name: 'Standing hip abduction',  sets: 3, reps: 10  },
   { name: '90/90 hip stretch',       sets: 2, reps: null, note: '2 min each' },
-  { name: 'Glute bridges',           sets: 3, reps: 10  },
-  { name: 'Wall angels',             sets: 3, reps: 10  },
-  { name: 'Right QL stretch',        sets: 3, reps: null, note: '60 sec' },
+  { name: 'Standing hip abduction',  sets: 3, reps: 10  },
   { name: 'Cervical retraction',     sets: 3, reps: 10  },
+  { name: 'Right QL stretch',        sets: 3, reps: null, note: '60 sec' },
   { name: 'Pelvic floor / kegels',   sets: 3, reps: 10  },
 ];
+
+function getOrderedWorkout(gymDay) {
+  const mainNames = new Set(gymDay.exercises.map(e => e.name.toLowerCase()));
+  const flow = [];
+  let step = 1;
+
+  PHYSIO_EXERCISES.forEach(ex => {
+    if (!mainNames.has(ex.name.toLowerCase())) {
+      flow.push({ ...ex, phase: 'warmup', step: step++ });
+    }
+  });
+
+  gymDay.exercises.forEach(ex => {
+    flow.push({ ...ex, phase: 'lift', step: step++ });
+  });
+
+  return flow;
+}
+
+function formatExerciseSets(ex) {
+  if (ex.note && !ex.reps) return `${ex.sets} sets · ${ex.note}`;
+  return `${ex.sets}×${ex.reps}${ex.note ? ' · ' + ex.note : ''}`;
+}
 
 const BLOCK_META = {
   morning: { icon: '🌅', label: 'Morning', time: '7am', freq: 'daily' },
@@ -110,9 +212,7 @@ function dayLabel() {
 
 function dayOfWeek() { return new Date().getDay(); } // 0=Sun
 
-function isGymDay() { return dayOfWeek() in GYM_PLAN; }
-
-function todayGym() { return GYM_PLAN[dayOfWeek()] || null; }
+function isGymDay() { return !!todayGym(); }
 
 async function api(table, method = 'GET', body = null, params = '') {
   const url = `${SUPABASE_URL}/rest/v1/${table}${params}`;
@@ -269,6 +369,117 @@ function toKg(val) {
   return useKg ? +val : +(val / 2.20462).toFixed(2);
 }
 function unitLabel() { return useKg ? 'kg' : 'lbs'; }
+
+// ─── PROGRESSIVE OVERLOAD (per-set) ───────────────────────────────────────────
+function normalizeSetsData(log) {
+  if (!log) return [];
+  if (Array.isArray(log.sets_data)) return log.sets_data;
+  const date = log.log_date || today();
+  const local = loadLocalSets(date, log.exercise);
+  if (local?.length) return local;
+  if (log.weight_kg) return [{ weight_kg: log.weight_kg, reps: log.reps }];
+  return [];
+}
+
+function getLogMaxWeight(log) {
+  const sets = normalizeSetsData(log);
+  if (!sets.length) return null;
+  const weights = sets.map(s => s.weight_kg).filter(Boolean);
+  return weights.length ? Math.max(...weights) : null;
+}
+
+function localSetsKey(date, exercise) {
+  return `gym-sets-${date}-${exercise}`;
+}
+
+function loadLocalSets(date, exercise) {
+  try {
+    const data = JSON.parse(localStorage.getItem(localSetsKey(date, exercise)));
+    return Array.isArray(data) ? data : null;
+  } catch { return null; }
+}
+
+function saveLocalSets(date, exercise, sets) {
+  localStorage.setItem(localSetsKey(date, exercise), JSON.stringify(sets));
+}
+
+function getLastSessionSets(logs, exerciseName, todayDate = today()) {
+  const prev = logs
+    .filter(l => l.exercise === exerciseName && l.log_date < todayDate)
+    .sort((a, b) => b.log_date.localeCompare(a.log_date));
+  for (const log of prev) {
+    const sets = normalizeSetsData(log);
+    if (sets.length) return sets;
+  }
+  return null;
+}
+
+function getExerciseStats(logs, exerciseName, todayDate = today()) {
+  const byDate = {};
+  logs.filter(l => l.exercise === exerciseName).forEach(l => {
+    const max = getLogMaxWeight(l);
+    if (max) byDate[l.log_date] = max;
+  });
+  const history = Object.entries(byDate)
+    .map(([date, weight]) => ({ date, weight }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const prevSessions = history.filter(h => h.date < todayDate);
+  const last = prevSessions.length ? prevSessions[prevSessions.length - 1].weight : null;
+  const prBeforeToday = prevSessions.length ? Math.max(...prevSessions.map(h => h.weight)) : null;
+  return { history, last, prBeforeToday, sessionCount: prevSessions.length };
+}
+
+function getSetOverloadStatus(current, lastSet) {
+  if (!current?.weight_kg) return null;
+  if (!lastSet?.weight_kg) return { text: 'new', cls: 'overload-new' };
+  if (current.weight_kg > lastSet.weight_kg) return { text: '↑ wt', cls: 'overload-up' };
+  if (current.weight_kg === lastSet.weight_kg && (current.reps || 0) > (lastSet.reps || 0)) {
+    return { text: '↑ reps', cls: 'overload-up' };
+  }
+  if (current.weight_kg < lastSet.weight_kg) return { text: '↓ wt', cls: 'overload-down' };
+  return { text: 'same', cls: 'overload-same' };
+}
+
+function formatSetHint(lastSet) {
+  if (!lastSet?.weight_kg) return '';
+  const reps = lastSet.reps ? `×${lastSet.reps}` : '';
+  return `was ${toDisplay(lastSet.weight_kg)}${unitLabel()}${reps}`;
+}
+
+function ensureExerciseSets(key, ex, savedSets, lastSets) {
+  if (gymState[key]?.sets?.length) return gymState[key];
+  const count = Math.max(ex.sets || 3, savedSets?.length || 0, lastSets?.length || 0) || 3;
+  const sets = [];
+  for (let i = 0; i < count; i++) {
+    sets.push({
+      weight_kg: savedSets?.[i]?.weight_kg ?? null,
+      reps: savedSets?.[i]?.reps ?? ex.reps ?? null,
+    });
+  }
+  gymState[key] = { sets };
+  return gymState[key];
+}
+
+function formatSetsSummary(sets) {
+  return sets
+    .filter(s => s.weight_kg)
+    .map(s => `${toDisplay(s.weight_kg)}${unitLabel()}${s.reps ? '×' + s.reps : ''}`)
+    .join(', ');
+}
+
+function getTrackedExercises(logs) {
+  const names = new Set();
+  logs.forEach(l => {
+    if (getLogMaxWeight(l) || normalizeSetsData(l).length) names.add(l.exercise);
+  });
+  return [...names].sort();
+}
+
+const saveSetTimers = {};
+function scheduleSaveSets(dayType, ex, sets) {
+  clearTimeout(saveSetTimers[ex.name]);
+  saveSetTimers[ex.name] = setTimeout(() => saveExerciseSets(dayType, ex, sets), 400);
+}
 
 // ─── WATER WIDGET ─────────────────────────────────────────────────────────────
 function renderWaterWidget() {
@@ -605,15 +816,20 @@ async function renderGym() {
 
   try {
     if (!gymDay) {
-      const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek()];
+      const dow = DAY_NAMES[dayOfWeek()];
       container.innerHTML = `
         <div class="rest-day">
           <div class="rest-icon">🛋️</div>
           <p>Rest day — ${dow}</p>
           <small>Next gym day: ${getNextGymDay()}</small>
         </div>`;
+      container.appendChild(renderWorkoutPicker(null));
     } else {
       await renderWorkout(gymDay, container);
+      container.insertBefore(
+        renderWorkoutPicker(getGymOverride() || getScheduledTemplateId()),
+        container.children[1] || null
+      );
     }
   } catch (e) {
     console.error('renderGym failed', e);
@@ -623,39 +839,70 @@ async function renderGym() {
   await renderGymHistory();
 }
 
+function renderWorkoutPicker(activeId) {
+  const wrap = document.createElement('div');
+  wrap.className = 'workout-picker';
+
+  const label = document.createElement('div');
+  label.className = 'workout-picker-label';
+  label.textContent = activeId ? 'Today\'s workout' : 'Doing a workout anyway?';
+  wrap.appendChild(label);
+
+  const btns = document.createElement('div');
+  btns.className = 'workout-picker-btns';
+  getAllTemplates().forEach(({ id, name }) => {
+    const btn = document.createElement('button');
+    btn.className = 'workout-pick-btn' + (id === activeId ? ' active' : '');
+    btn.textContent = getTemplateShortName(name);
+    btn.addEventListener('click', () => {
+      if (getGymOverride()) {
+        if (id === getGymOverride()) clearGymOverride();
+        else setGymOverride(id);
+      } else if (id !== getScheduledTemplateId()) {
+        setGymOverride(id);
+      }
+      renderGym();
+    });
+    btns.appendChild(btn);
+  });
+  wrap.appendChild(btns);
+
+  if (getGymOverride() && getScheduledGym()) {
+    const hint = document.createElement('div');
+    hint.className = 'workout-picker-hint';
+    hint.textContent = `Scheduled: ${getTemplateShortName(getScheduledGym().name)} · tap again to reset`;
+    wrap.appendChild(hint);
+  }
+
+  return wrap;
+}
+
 function getNextGymDay() {
-  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const gymDays = Object.keys(GYM_PLAN).map(Number);
   let d = dayOfWeek();
   for (let i = 1; i <= 7; i++) {
     d = (d + 1) % 7;
-    if (gymDays.includes(d)) return days[d];
+    if (gymConfig.schedule[d]) return DAY_NAMES[d];
   }
+  return '—';
 }
 
 async function renderWorkout(gymDay, container) {
-  // Load today's saved weights + last session weights for each exercise (progressive overload hint)
-  let saved = [], prevLogs = [];
+  // Load today's saved weights + full history for progressive overload
+  let saved = [], allLogs = [];
   try {
-    [saved, prevLogs] = await Promise.all([
+    [saved, allLogs] = await Promise.all([
       api('gym_logs', 'GET', null,
-        `?log_date=eq.${today()}&day_type=eq.${encodeURIComponent(gymDay.name)}&select=exercise,weight_kg`),
+        `?log_date=eq.${today()}&day_type=eq.${encodeURIComponent(gymDay.name)}&select=exercise,weight_kg,sets_data,reps`),
       api('gym_logs', 'GET', null,
-        `?log_date=neq.${today()}&day_type=eq.${encodeURIComponent(gymDay.name)}&order=log_date.desc&limit=60&select=exercise,weight_kg,log_date`),
+        `?select=exercise,weight_kg,sets_data,reps,log_date&order=log_date.asc&limit=500`),
     ]);
   } catch (e) {
     // Still show exercises if Supabase is unreachable
   }
   saved = saved || [];
-  prevLogs = prevLogs || [];
-  const savedWeights = {};
-  (saved || []).forEach(s => { savedWeights[s.exercise] = s.weight_kg; });
-
-  // Last weight per exercise from previous sessions
-  const lastWeights = {};
-  (prevLogs || []).forEach(l => {
-    if (!lastWeights[l.exercise] && l.weight_kg) lastWeights[l.exercise] = l.weight_kg;
-  });
+  allLogs = allLogs || [];
+  const savedByExercise = {};
+  saved.forEach(s => { savedByExercise[s.exercise] = normalizeSetsData(s); });
 
   container.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px 4px;">
@@ -667,124 +914,150 @@ async function renderWorkout(gymDay, container) {
     </div>`;
   const card = document.createElement('div');
   card.className = 'card';
+  const flow = getOrderedWorkout(gymDay);
+  let lastPhase = null;
 
-  gymDay.exercises.forEach((ex, idx) => {
-    const key = ex.name;
-    const savedKg = savedWeights[key];
-    const displayVal = savedKg ? toDisplay(savedKg) : '';
-    if (!gymState[key]) gymState[key] = { done: false, weight: savedKg || '' };
-    const prev = lastWeights[key];
-    const hint = prev ? `last: ${toDisplay(prev)}${unitLabel()}` : 'first session';
+  flow.forEach(ex => {
+    if (ex.phase !== lastPhase) {
+      lastPhase = ex.phase;
+      const divider = document.createElement('div');
+      divider.className = 'exercise-phase-label';
+      divider.textContent = ex.phase === 'warmup' ? 'Warmup' : 'Main workout';
+      card.appendChild(divider);
+    }
+
+    const key = ex.phase === 'warmup' ? `physio-${ex.name}` : ex.name;
     const item = document.createElement('div');
     item.className = 'exercise-item';
-    item.innerHTML = `
-      <div class="exercise-done ${gymState[key].done ? 'done' : ''}" data-idx="${idx}">${checkSVG()}</div>
-      <div class="exercise-info">
-        <div class="exercise-name">${ex.name}</div>
-        <div class="exercise-sets">${ex.sets}×${ex.reps} <span style="color:var(--muted);font-size:11px">· ${hint}</span></div>
-      </div>
-      <input type="number" class="weight-input" placeholder="${unitLabel()}" value="${displayVal}" min="0" step="0.5">
-    `;
-    item.querySelector('.exercise-done').addEventListener('click', function() {
-      gymState[key].done = !gymState[key].done;
-      this.classList.toggle('done', gymState[key].done);
-    });
-    item.querySelector('.weight-input').addEventListener('change', async e => {
-      const kg = toKg(e.target.value);
-      gymState[key].weight = kg;
-      await saveGymExercise(gymDay.name, ex, kg);
-    });
+
+    if (ex.phase === 'warmup') {
+      if (!gymState[key]) gymState[key] = { done: false };
+      item.innerHTML = `
+        <div class="exercise-step">${ex.step}</div>
+        <div class="exercise-done ${gymState[key].done ? 'done' : ''}">${checkSVG()}</div>
+        <div class="exercise-info">
+          <div class="exercise-name">${ex.name}</div>
+          <div class="exercise-sets">${formatExerciseSets(ex)}</div>
+        </div>`;
+      item.querySelector('.exercise-done').addEventListener('click', function() {
+        gymState[key].done = !gymState[key].done;
+        this.classList.toggle('done', gymState[key].done);
+      });
+    } else {
+      const lastSets = getLastSessionSets(allLogs, key);
+      const savedSets = savedByExercise[key] || loadLocalSets(today(), key);
+      const state = ensureExerciseSets(key, ex, savedSets, lastSets);
+      const stats = getExerciseStats(allLogs, key);
+
+      const block = document.createElement('div');
+      block.className = 'exercise-block';
+
+      const header = document.createElement('div');
+      header.className = 'exercise-block-header';
+      const bestHint = stats.prBeforeToday != null
+        ? `<span class="exercise-hint">best ${toDisplay(stats.prBeforeToday)}${unitLabel()}</span>` : '';
+      header.innerHTML = `
+        <div class="exercise-step">${ex.step}</div>
+        <div class="exercise-info">
+          <div class="exercise-name">${ex.name}</div>
+          <div class="exercise-sets">target ${formatExerciseSets(ex)} ${bestHint}</div>
+        </div>`;
+      block.appendChild(header);
+
+      const setList = document.createElement('div');
+      setList.className = 'set-list';
+
+      function renderSetRows() {
+        setList.innerHTML = '';
+        state.sets.forEach((set, si) => {
+          const lastSet = lastSets?.[si];
+          const status = getSetOverloadStatus(set, lastSet);
+          const row = document.createElement('div');
+          row.className = 'set-row';
+          row.innerHTML = `
+            <span class="set-num">${si + 1}</span>
+            <input type="number" class="set-weight" placeholder="${unitLabel()}" value="${set.weight_kg ? toDisplay(set.weight_kg) : ''}" min="0" step="0.5">
+            <span class="set-x">×</span>
+            <input type="number" class="set-reps" placeholder="reps" value="${set.reps ?? ''}" min="0" step="1">
+            <span class="set-hint">${formatSetHint(lastSet)}</span>
+            <span class="overload-badge ${status?.cls || ''}">${status?.text || ''}</span>`;
+
+          const wInput = row.querySelector('.set-weight');
+          const rInput = row.querySelector('.set-reps');
+          const badge = row.querySelector('.overload-badge');
+
+          function syncSet() {
+            set.weight_kg = toKg(wInput.value);
+            set.reps = rInput.value ? +rInput.value : null;
+            const st = getSetOverloadStatus(set, lastSet);
+            badge.textContent = st?.text || '';
+            badge.className = `overload-badge ${st?.cls || ''}`;
+            saveLocalSets(today(), key, state.sets);
+            scheduleSaveSets(gymDay.name, ex, state.sets);
+          }
+
+          wInput.addEventListener('input', syncSet);
+          rInput.addEventListener('input', syncSet);
+          setList.appendChild(row);
+        });
+      }
+
+      renderSetRows();
+
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'add-set-btn';
+      addBtn.textContent = '+ add set';
+      addBtn.addEventListener('click', () => {
+        const prev = state.sets[state.sets.length - 1];
+        state.sets.push({
+          weight_kg: prev?.weight_kg ?? null,
+          reps: prev?.reps ?? ex.reps ?? null,
+        });
+        renderSetRows();
+      });
+
+      block.appendChild(setList);
+      block.appendChild(addBtn);
+      item.appendChild(block);
+      item.className = 'exercise-block-wrap';
+    }
+
     card.appendChild(item);
   });
 
   container.appendChild(card);
-
-  // ─── Physio section (collapsible) ───
-  const physioOpen = localStorage.getItem('physioOpen') !== 'false';
-  const physioWrap = document.createElement('div');
-  physioWrap.style.cssText = 'margin:10px 14px 0;';
-
-  const physioHeader = document.createElement('div');
-  physioHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;-webkit-tap-highlight-color:transparent;';
-  physioHeader.innerHTML = `
-    <span style="font-family:Georgia,serif;font-size:14px;">💪 Physio warmup</span>
-    <div style="display:flex;align-items:center;gap:8px;">
-      <span id="physio-count" style="font-size:12px;color:var(--muted);">${PHYSIO_EXERCISES.length} exercises</span>
-      <svg id="physio-chevron" viewBox="0 0 20 20" fill="none" stroke="#aaa" stroke-width="2" width="16" height="16" style="transition:transform .2s;${physioOpen ? 'transform:rotate(180deg)' : ''}"><polyline points="5,8 10,13 15,8"/></svg>
-    </div>`;
-
-  const physioBody = document.createElement('div');
-  physioBody.id = 'physio-body';
-  physioBody.style.cssText = `margin-top:2px;${physioOpen ? '' : 'display:none'}`;
-
-  const physioCard = document.createElement('div');
-  physioCard.className = 'card';
-  physioCard.style.margin = '0';
-
-  let physioChecked = 0;
-  PHYSIO_EXERCISES.forEach((ex, idx) => {
-    const key = `physio-${ex.name}`;
-    if (!gymState[key]) gymState[key] = { done: false };
-    const setsLabel = ex.reps ? `${ex.sets}×${ex.reps}${ex.note ? ' · ' + ex.note : ''}` : `${ex.sets} sets · ${ex.note}`;
-    const row = document.createElement('div');
-    row.className = 'exercise-item';
-    row.style.borderBottom = idx < PHYSIO_EXERCISES.length - 1 ? '1px solid #f0ede9' : 'none';
-    row.innerHTML = `
-      <div class="exercise-done ${gymState[key].done ? 'done' : ''}">${checkSVG()}</div>
-      <div class="exercise-info">
-        <div class="exercise-name">${ex.name}</div>
-        <div class="exercise-sets">${setsLabel}</div>
-      </div>`;
-    row.querySelector('.exercise-done').addEventListener('click', function() {
-      gymState[key].done = !gymState[key].done;
-      this.classList.toggle('done', gymState[key].done);
-      // Update count badge
-      const doneCount = PHYSIO_EXERCISES.filter((_, i) => gymState[`physio-${PHYSIO_EXERCISES[i].name}`]?.done).length;
-      document.getElementById('physio-count').textContent =
-        doneCount > 0 ? `${doneCount}/${PHYSIO_EXERCISES.length}` : `${PHYSIO_EXERCISES.length} exercises`;
-    });
-    physioCard.appendChild(row);
-  });
-
-  physioBody.appendChild(physioCard);
-  physioHeader.addEventListener('click', () => {
-    const open = physioBody.style.display === 'none';
-    physioBody.style.display = open ? 'block' : 'none';
-    physioHeader.querySelector('#physio-chevron').style.transform = open ? 'rotate(180deg)' : '';
-    localStorage.setItem('physioOpen', open);
-  });
-
-  physioWrap.appendChild(physioHeader);
-  physioWrap.appendChild(physioBody);
-  container.appendChild(physioWrap);
-
-  const btn = document.createElement('button');
-  btn.className = 'log-btn';
-  btn.textContent = 'Save Workout';
-  btn.style.marginTop = '10px';
-  btn.addEventListener('click', () => saveWorkout(gymDay));
-  container.appendChild(btn);
 }
 
-async function saveGymExercise(dayType, ex, weight) {
+async function saveExerciseSets(dayType, ex, sets) {
   const logDate = today();
+  const setsData = sets.map(s => ({
+    weight_kg: s.weight_kg || null,
+    reps: s.reps || null,
+  }));
+  saveLocalSets(logDate, ex.name, setsData);
+  const filled = setsData.filter(s => s.weight_kg || s.reps);
+  const topWeight = filled.length
+    ? Math.max(...filled.map(s => s.weight_kg || 0).filter(Boolean)) || null
+    : null;
+  const payload = {
+    log_date: logDate,
+    day_type: dayType,
+    exercise: ex.name,
+    sets: sets.length,
+    reps: filled[filled.length - 1]?.reps || ex.reps,
+    weight_kg: topWeight,
+    sets_data: setsData,
+  };
+
   const existing = await api('gym_logs', 'GET', null,
     `?log_date=eq.${logDate}&exercise=eq.${encodeURIComponent(ex.name)}&limit=1`);
-  const payload = { log_date: logDate, day_type: dayType, exercise: ex.name, sets: ex.sets, reps: ex.reps, weight_kg: weight || null };
-  if (existing && existing.length > 0) {
-    await api('gym_logs', 'PATCH', { weight_kg: weight || null },
+  if (existing?.length) {
+    await api('gym_logs', 'PATCH', payload,
       `?log_date=eq.${logDate}&exercise=eq.${encodeURIComponent(ex.name)}`);
-  } else {
-    await api('gym_logs', 'POST', payload).catch(() => {});
+  } else if (filled.length) {
+    await api('gym_logs', 'POST', payload);
   }
-}
-
-async function saveWorkout(gymDay) {
-  for (const ex of gymDay.exercises) {
-    const key = ex.name;
-    await saveGymExercise(gymDay.name, ex, gymState[key]?.weight || null);
-  }
-  showToast('Workout saved');
 }
 
 function setUnit(kg) {
@@ -797,12 +1070,22 @@ function setUnit(kg) {
 async function renderGymHistory() {
   const container = document.getElementById('gym-history');
   const logs = await api('gym_logs', 'GET', null,
-    '?order=log_date.desc&limit=40') || [];
+    '?order=log_date.desc&limit=80&select=exercise,weight_kg,sets_data,reps,log_date,day_type') || [];
 
   if (logs.length === 0) {
     container.innerHTML = '<div class="empty">No workout history yet</div>';
     return;
   }
+
+  // Build previous weight lookup per exercise (for delta on each session)
+  const prevByExercise = {};
+  const sortedAsc = [...logs].sort((a, b) => a.log_date.localeCompare(b.log_date));
+  sortedAsc.forEach(l => {
+    const max = getLogMaxWeight(l);
+    if (!max) return;
+    l._prev = prevByExercise[l.exercise];
+    prevByExercise[l.exercise] = max;
+  });
 
   // Group by date+day_type
   const grouped = {};
@@ -818,8 +1101,19 @@ async function renderGymHistory() {
     const item = document.createElement('div');
     item.className = 'history-item';
     const exList = g.exercises
-      .filter(e => e.weight_kg)
-      .map(e => `${e.exercise}: ${toDisplay(e.weight_kg)}${unitLabel()}`)
+      .map(e => {
+        const sets = normalizeSetsData(e);
+        const summary = formatSetsSummary(sets);
+        if (!summary) return null;
+        const max = getLogMaxWeight(e);
+        if (e._prev != null && max) {
+          const diff = max - e._prev;
+          if (diff > 0) return `${e.exercise}: ${summary} <span class="overload-up-inline">↑</span>`;
+          if (diff < 0) return `${e.exercise}: ${summary} <span class="overload-down-inline">↓</span>`;
+        }
+        return `${e.exercise}: ${summary}`;
+      })
+      .filter(Boolean)
       .join(' · ');
     item.innerHTML = `
       <div class="history-date">${g.date} — ${g.type}</div>
@@ -842,7 +1136,7 @@ async function loadProgressData() {
     const [ratings30, weeklyLogs, gymLogs30] = await Promise.all([
       api('daily_ratings', 'GET', null, '?order=log_date.asc&limit=30'),
       api('weekly_logs', 'GET', null, '?order=week_start.asc&limit=12'),
-      api('gym_logs', 'GET', null, '?order=log_date.asc&limit=60'),
+      api('gym_logs', 'GET', null, '?select=exercise,weight_kg,sets_data,reps,log_date&order=log_date.asc&limit=500'),
     ]);
     progressData = { ratings30: ratings30 || [], weeklyLogs: weeklyLogs || [], gymLogs30: gymLogs30 || [] };
   } catch (e) { progressData = { ratings30: [], weeklyLogs: [], gymLogs30: [] }; }
@@ -906,6 +1200,56 @@ function renderCharts() {
   drawLineChart('chart-gym',
     Object.entries(gymByWeek).sort().map(([k, v]) => ({ x: k.slice(5), y: v.size })),
     ' sessions', '#4caf50', 0, 5);
+
+  renderLiftProgressChart();
+}
+
+function renderLiftProgressChart() {
+  const select = document.getElementById('lift-select');
+  const summary = document.getElementById('lift-summary');
+  const card = document.getElementById('lift-progress-card');
+  if (!select || !summary) return;
+
+  const exercises = getTrackedExercises(progressData.gymLogs30);
+  if (exercises.length === 0) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = 'block';
+
+  const saved = localStorage.getItem('liftChartExercise');
+  const current = saved && exercises.includes(saved) ? saved : exercises[0];
+
+  select.innerHTML = exercises.map(ex =>
+    `<option value="${ex}" ${ex === current ? 'selected' : ''}>${ex}</option>`
+  ).join('');
+
+  function draw(exerciseName) {
+    const stats = getExerciseStats(progressData.gymLogs30, exerciseName, '9999-12-31');
+    const pts = stats.history.map(h => ({ x: h.date.slice(5), y: toDisplay(h.weight) }));
+    drawLineChart('chart-lift', pts, unitLabel(), '#1a1a1a');
+
+    if (stats.history.length === 0) {
+      summary.textContent = 'No data yet';
+      return;
+    }
+    const latest = stats.history[stats.history.length - 1];
+    const parts = [`Current: ${toDisplay(latest.weight)}${unitLabel()}`];
+    if (stats.prBeforeToday != null) parts.push(`Best: ${toDisplay(stats.prBeforeToday)}${unitLabel()}`);
+    if (stats.history.length >= 2) {
+      const first = stats.history[0];
+      const gain = +(toDisplay(latest.weight) - toDisplay(first.weight)).toFixed(1);
+      if (gain > 0) parts.push(`+${gain}${unitLabel()} since start`);
+      else if (gain < 0) parts.push(`${gain}${unitLabel()} since start`);
+    }
+    summary.textContent = parts.join(' · ');
+  }
+
+  draw(current);
+  select.onchange = () => {
+    localStorage.setItem('liftChartExercise', select.value);
+    draw(select.value);
+  };
 }
 
 function getWeekStart(date) {
@@ -1184,19 +1528,34 @@ function renderGymPanel(container) {
   container.innerHTML = '';
   const card = document.createElement('div');
   card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
-  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  Object.entries(GYM_PLAN).forEach(([dow, plan], i) => {
+  getAllTemplates().forEach(({ id, name }, i, arr) => {
+    const currentDow = getTemplateDay(id);
     const row = document.createElement('div');
-    row.style.cssText = `display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;${i < Object.keys(GYM_PLAN).length-1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
-    row.innerHTML = `
-      <span style="font-size:18px">🏋️</span>
-      <div style="flex:1">
-        <div style="font-size:14px">${plan.name}</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">${days[dow]} · ${plan.exercises.length} exercises</div>
-      </div>
-      <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
+    row.style.cssText = `display:flex;align-items:center;gap:10px;padding:13px 16px;${i < arr.length - 1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
+
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1;min-width:0;cursor:pointer;';
+    info.innerHTML = `
+      <div style="font-size:14px">${name}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px">${currentDow != null ? DAY_NAMES[currentDow] : 'Not scheduled'} · tap to edit sets/reps</div>
     `;
-    row.addEventListener('click', () => openGymModal(+dow, plan));
+    info.addEventListener('click', () => openGymModal(id, gymConfig.templates[id]));
+
+    const daySelect = document.createElement('select');
+    daySelect.className = 'gym-day-select';
+    daySelect.innerHTML = ['<option value="">Rest</option>']
+      .concat(DAY_NAMES.map((d, n) =>
+        `<option value="${n}" ${currentDow === n ? 'selected' : ''}>${d}</option>`
+      )).join('');
+    daySelect.addEventListener('click', e => e.stopPropagation());
+    daySelect.addEventListener('change', e => {
+      setTemplateDay(id, e.target.value === '' ? null : +e.target.value);
+      renderGymPanel(container);
+      showToast('Schedule updated');
+    });
+
+    row.appendChild(info);
+    row.appendChild(daySelect);
     card.appendChild(row);
   });
   container.appendChild(card);
@@ -1340,30 +1699,52 @@ function updateHeaderDay() {
 // ─── GYM SETTINGS (legacy stub — rendering now via renderGymPanel) ─────────────
 function renderGymSettings() {}
 
-function openGymModal(dow, plan) {
+function moveExercise(templateId, idx, dir) {
+  const arr = gymConfig.templates[templateId].exercises;
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= arr.length) return;
+  [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
+  saveGymConfig();
+  openGymModal(templateId, gymConfig.templates[templateId]);
+}
+
+function openGymModal(templateId, plan) {
   const overlay = document.getElementById('gym-modal-overlay');
   document.getElementById('gym-modal-title').textContent = plan.name;
   const body = document.getElementById('gym-modal-body');
   body.innerHTML = '';
 
+  const hint = document.createElement('div');
+  hint.style.cssText = 'padding:0 18px 8px;font-size:12px;color:var(--muted);';
+  hint.textContent = 'Exercises run top to bottom. Use arrows to reorder.';
+  body.appendChild(hint);
+
   const card = document.createElement('div');
-  card.style.cssText = 'margin:10px 18px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
+  card.style.cssText = 'margin:0 18px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
 
   plan.exercises.forEach((ex, idx) => {
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid #f0ede9;';
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid #f0ede9;';
     if (idx === plan.exercises.length - 1) row.style.borderBottom = 'none';
     row.innerHTML = `
-      <div style="flex:1">
+      <span style="font-size:12px;color:var(--muted);width:18px;text-align:center;flex-shrink:0;">${idx + 1}</span>
+      <div style="flex:1;min-width:0;">
         <div style="font-size:14px">${ex.name}</div>
         <div style="font-size:12px;color:var(--muted)">${ex.sets} sets × ${ex.reps} reps</div>
       </div>
-      <div style="display:flex;gap:6px;align-items:center">
+      <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;">
+        <button type="button" class="exercise-move-btn" data-dir="-1" ${idx === 0 ? 'disabled' : ''}>↑</button>
+        <button type="button" class="exercise-move-btn" data-dir="1" ${idx === plan.exercises.length - 1 ? 'disabled' : ''}>↓</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
         <input type="number" value="${ex.sets}" min="1" max="10" style="width:38px;border:1.5px solid var(--border);border-radius:6px;padding:4px;font-size:13px;text-align:center;background:#fff;" data-idx="${idx}" data-field="sets">
         <span style="font-size:12px;color:var(--muted)">×</span>
         <input type="number" value="${ex.reps}" min="1" max="50" style="width:38px;border:1.5px solid var(--border);border-radius:6px;padding:4px;font-size:13px;text-align:center;background:#fff;" data-idx="${idx}" data-field="reps">
       </div>
     `;
+    row.querySelectorAll('.exercise-move-btn').forEach(btn => {
+      btn.addEventListener('click', () => moveExercise(templateId, idx, +btn.dataset.dir));
+    });
     card.appendChild(row);
   });
 
@@ -1376,11 +1757,12 @@ function openGymModal(dow, plan) {
     card.querySelectorAll('input[data-field]').forEach(input => {
       const idx = +input.dataset.idx;
       const field = input.dataset.field;
-      GYM_PLAN[dow].exercises[idx][field] = +input.value;
+      gymConfig.templates[templateId].exercises[idx][field] = +input.value;
     });
-    localStorage.setItem('gymPlan', JSON.stringify(GYM_PLAN));
+    saveGymConfig();
     closeGymModal();
-    renderGymSettings();
+    const gymBody = document.getElementById('acc-body-gym');
+    if (gymBody) renderGymPanel(gymBody);
     showToast('Workout updated');
   });
   body.appendChild(saveBtn);
