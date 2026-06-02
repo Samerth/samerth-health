@@ -114,28 +114,76 @@ const DEFAULT_GYM_TEMPLATES = {
 
 const DEFAULT_GYM_SCHEDULE = { 1: 'a', 2: 'b', 4: 'c', 5: 'd' }; // Mon, Tue, Thu, Fri
 
+function normalizeGymTemplate(tpl, fallback) {
+  if (Array.isArray(tpl)) {
+    tpl = { name: fallback?.name || 'Workout', exercises: tpl };
+  }
+  if (!tpl || typeof tpl !== 'object') {
+    return fallback ? JSON.parse(JSON.stringify(fallback)) : { name: 'Workout', exercises: [] };
+  }
+  const rawList = tpl.exercises ?? tpl.items ?? tpl.workouts;
+  const exercises = (Array.isArray(rawList) ? rawList : [])
+    .map(ex => ({
+      name: (ex?.name || ex?.label || '').trim(),
+      sets: Number(ex?.sets) > 0 ? Number(ex.sets) : 3,
+      reps: ex?.reps != null && ex.reps !== '' ? Number(ex.reps) : 12,
+      note: ex?.note || undefined,
+    }))
+    .filter(ex => ex.name);
+  const out = {
+    name: tpl.name || tpl.title || fallback?.name || 'Workout',
+    exercises: exercises.length ? exercises : JSON.parse(JSON.stringify(fallback?.exercises || [])),
+  };
+  return out;
+}
+
+function normalizeGymConfig(raw) {
+  const defaults = {
+    templates: JSON.parse(JSON.stringify(DEFAULT_GYM_TEMPLATES)),
+    schedule: { ...DEFAULT_GYM_SCHEDULE },
+  };
+  const src = raw?.templates && raw?.schedule ? raw : defaults;
+  const templates = {};
+  const ids = new Set([...Object.keys(defaults.templates), ...Object.keys(src.templates || {})]);
+  ids.forEach(id => {
+    templates[id] = normalizeGymTemplate(src.templates?.[id], defaults.templates[id]);
+  });
+  const schedule = { ...defaults.schedule, ...(src.schedule || {}) };
+  Object.keys(schedule).forEach(dow => {
+    if (!templates[schedule[dow]]) delete schedule[dow];
+  });
+  if (!Object.keys(schedule).length) Object.assign(schedule, defaults.schedule);
+  return { templates, schedule };
+}
+
 function loadGymConfig() {
   try {
     const saved = JSON.parse(localStorage.getItem('gymConfig'));
-    if (saved?.templates && saved?.schedule) return saved;
+    if (saved?.templates && saved?.schedule) return normalizeGymConfig(saved);
   } catch {}
   // migrate legacy gymPlan (keyed by weekday number)
   try {
     const old = JSON.parse(localStorage.getItem('gymPlan'));
     if (old?.['1']) {
-      return {
+      return normalizeGymConfig({
         templates: { a: old['1'], b: old['2'], c: old['4'], d: old['5'] },
         schedule: { 1: 'a', 2: 'b', 4: 'c', 5: 'd' },
-      };
+      });
     }
   } catch {}
-  return {
-    templates: JSON.parse(JSON.stringify(DEFAULT_GYM_TEMPLATES)),
-    schedule: { ...DEFAULT_GYM_SCHEDULE },
-  };
+  return normalizeGymConfig(null);
+}
+
+function refreshGymConfig() {
+  const next = normalizeGymConfig(JSON.parse(localStorage.getItem('gymConfig') || 'null'));
+  const changed = JSON.stringify(next) !== JSON.stringify(gymConfig);
+  gymConfig = next;
+  if (changed) saveGymConfig();
+  return gymConfig;
 }
 
 let gymConfig = loadGymConfig();
+saveGymConfig();
 
 function saveGymConfig() {
   localStorage.setItem('gymConfig', JSON.stringify(gymConfig));
@@ -154,17 +202,23 @@ function clearGymOverride() {
 }
 
 function getScheduledTemplateId() {
-  return gymConfig.schedule[dayOfWeek()] || null;
+  const dow = dayOfWeek();
+  return gymConfig.schedule[dow] ?? gymConfig.schedule[String(dow)] ?? null;
+}
+
+function getTemplateById(id) {
+  if (!id || !gymConfig.templates[id]) return null;
+  return normalizeGymTemplate(gymConfig.templates[id], DEFAULT_GYM_TEMPLATES[id]);
 }
 
 function getScheduledGym() {
   const id = getScheduledTemplateId();
-  return id ? gymConfig.templates[id] : null;
+  return id ? getTemplateById(id) : null;
 }
 
 function todayGym() {
   const override = getGymOverride();
-  if (override && gymConfig.templates[override]) return gymConfig.templates[override];
+  if (override) return getTemplateById(override);
   return getScheduledGym();
 }
 
@@ -205,7 +259,8 @@ const PHYSIO_EXERCISES = [
 ];
 
 function getOrderedWorkout(gymDay) {
-  const mainNames = new Set(gymDay.exercises.map(e => e.name.toLowerCase()));
+  const list = Array.isArray(gymDay?.exercises) ? gymDay.exercises : [];
+  const mainNames = new Set(list.map(e => e.name.toLowerCase()));
   const flow = [];
   let step = 1;
 
@@ -215,7 +270,7 @@ function getOrderedWorkout(gymDay) {
     }
   });
 
-  gymDay.exercises.forEach(ex => {
+  list.forEach(ex => {
     flow.push({ ...ex, phase: 'lift', step: step++ });
   });
 
@@ -1069,9 +1124,12 @@ async function saveDay() {
 async function renderGym() {
   const container = document.getElementById('gym-content');
   const historyContainer = document.getElementById('gym-history');
+  if (!container) return;
+  refreshGymConfig();
   historyContainer.innerHTML = '';
   container.innerHTML = '';
   const gymDay = todayGym();
+  const activeId = getGymOverride() || getScheduledTemplateId();
 
   try {
     if (!gymDay) {
@@ -1081,14 +1139,12 @@ async function renderGym() {
           <div class="rest-icon">🛋️</div>
           <p>Rest day — ${dow}</p>
           <small>Next gym day: ${getNextGymDay()}</small>
+          <small style="display:block;margin-top:10px;color:var(--text);">Tap a workout below to load exercises</small>
         </div>`;
       container.appendChild(renderWorkoutPicker(null));
     } else {
       await renderWorkout(gymDay, container);
-      container.insertBefore(
-        renderWorkoutPicker(getGymOverride() || getScheduledTemplateId()),
-        container.children[1] || null
-      );
+      container.appendChild(renderWorkoutPicker(activeId));
     }
   } catch (e) {
     console.error('renderGym failed', e);
@@ -1175,6 +1231,12 @@ async function renderWorkout(gymDay, container) {
   card.className = 'card';
   const flow = getOrderedWorkout(gymDay);
   let lastPhase = null;
+
+  if (!flow.length) {
+    card.innerHTML = '<div class="empty" style="padding:20px;">No exercises in this workout — open Settings → Gym Plan to restore defaults</div>';
+    container.appendChild(card);
+    return;
+  }
 
   flow.forEach(ex => {
     if (ex.phase !== lastPhase) {
@@ -2199,6 +2261,8 @@ function moveExercise(templateId, idx, dir) {
 
 function openGymModal(templateId, plan) {
   const overlay = document.getElementById('gym-modal-overlay');
+  plan = getTemplateById(templateId) || normalizeGymTemplate(plan, DEFAULT_GYM_TEMPLATES[templateId]);
+  gymConfig.templates[templateId] = plan;
   document.getElementById('gym-modal-title').textContent = plan.name;
   const body = document.getElementById('gym-modal-body');
   body.innerHTML = '';
@@ -2211,15 +2275,16 @@ function openGymModal(templateId, plan) {
   const card = document.createElement('div');
   card.style.cssText = 'margin:0 18px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
 
-  plan.exercises.forEach((ex, idx) => {
+  (plan.exercises || []).forEach((ex, idx) => {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid #f0ede9;';
     if (idx === plan.exercises.length - 1) row.style.borderBottom = 'none';
+    const repsLabel = ex.reps != null ? `${ex.reps} reps` : (ex.note || '');
     row.innerHTML = `
       <span style="font-size:12px;color:var(--muted);width:18px;text-align:center;flex-shrink:0;">${idx + 1}</span>
       <div style="flex:1;min-width:0;">
         <div style="font-size:14px">${ex.name}</div>
-        <div style="font-size:12px;color:var(--muted)">${ex.sets} sets × ${ex.reps} reps</div>
+        <div style="font-size:12px;color:var(--muted)">${ex.sets} sets${repsLabel ? ` × ${repsLabel}` : ''}</div>
       </div>
       <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;">
         <button type="button" class="exercise-move-btn" data-dir="-1" ${idx === 0 ? 'disabled' : ''}>↑</button>

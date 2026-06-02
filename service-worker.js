@@ -1,4 +1,4 @@
-const CACHE = 'samerth-v18';
+const CACHE = 'samerth-v19';
 const ASSETS = ['/', '/index.html', '/style.css', '/app.js', '/manifest.json'];
 
 self.addEventListener('install', e => {
