@@ -8,13 +8,16 @@ const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ─── STATE ─────────────────────────────────────────────────────────────────────
+const DEFAULT_RATINGS = { skin: 0, energy: 0, hip: 0, knee: 0, back: 0, weed: null, notes: '', sleep: '' };
+
 let habits = [];
 let todayChecks = {}; // habitId -> boolean
-let ratings = { skin: 0, energy: 0, hip: 0, knee: 0, back: 0, weed: null, notes: '', sleep: '' };
+let ratings = { ...DEFAULT_RATINGS };
 let gymState = {}; // exerciseName -> { sets: [{weight_kg, reps}] } | physio key -> { done }
 let progressData = {};
 let useKg = localStorage.getItem('useKg') !== 'false';
-let savingChecks = {};
+let activeLogDate = null; // which calendar day todayChecks belongs to
+let pendingCheckSync = new Set();
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function getHiddenBlocks() {
@@ -23,8 +26,55 @@ function getHiddenBlocks() {
 function setHiddenBlocks(arr) { localStorage.setItem('hiddenBlocks', JSON.stringify(arr)); }
 
 function getWaterGoal() { return parseInt(localStorage.getItem('waterGoal')) || 8; }
-function getWaterCount() { return parseInt(localStorage.getItem('water-' + today())) || 0; }
-function setWaterCount(n) { localStorage.setItem('water-' + today(), n); }
+
+function waterStorageKey(date) { return 'water-' + date; }
+
+function getWaterCount() {
+  const date = today();
+  const raw = localStorage.getItem(waterStorageKey(date));
+  if (raw == null) return 0;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === 'number') return parsed;
+    if (parsed?.date !== date) return 0;
+    if (parsed.updatedAt && localDateStr(new Date(parsed.updatedAt)) !== date) return 0;
+    return parsed.count || 0;
+  } catch {
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n)) return 0;
+    // Legacy plain-number keys: ignore if we have not opened the app on this date yet
+    const last = localStorage.getItem(LAST_OPEN_KEY);
+    return last === date ? n : 0;
+  }
+}
+
+function setWaterCount(n) {
+  const date = today();
+  localStorage.setItem(waterStorageKey(date), JSON.stringify({
+    date,
+    count: n,
+    updatedAt: Date.now(),
+  }));
+}
+
+function resetWaterForNewDay(date) {
+  localStorage.removeItem(waterStorageKey(date));
+}
+
+function isWaterCacheStale() {
+  const date = today();
+  const raw = localStorage.getItem(waterStorageKey(date));
+  if (raw == null) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === 'number') return true;
+    if (parsed?.date !== date) return true;
+    if (!parsed.updatedAt) return true;
+    return localDateStr(new Date(parsed.updatedAt)) !== date;
+  } catch {
+    return true;
+  }
+}
 
 // ─── GYM PLAN ─────────────────────────────────────────────────────────────────
 const DEFAULT_GYM_TEMPLATES = {
@@ -188,8 +238,175 @@ const BLOCK_META = {
 const BLOCK_ORDER = ['morning','midday','evening','bedtime']; // physio moved to gym screen
 
 // ─── UTILS ─────────────────────────────────────────────────────────────────────
+function localDateStr(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function today() {
-  return new Date().toISOString().split('T')[0];
+  return localDateStr();
+}
+
+function parseLocalDate(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function addDaysLocal(dateStr, days) {
+  const d = parseLocalDate(dateStr);
+  d.setDate(d.getDate() + days);
+  return localDateStr(d);
+}
+
+// ─── DAILY LOG STORAGE (local cache + Supabase sync) ───────────────────────────
+function localChecksKey(date) { return `habit-checks-${date}`; }
+function localRatingsKey(date) { return `habit-ratings-${date}`; }
+const LAST_OPEN_KEY = 'lastAppOpenDate';
+
+function isNewCalendarDay() {
+  const now = today();
+  const last = localStorage.getItem(LAST_OPEN_KEY);
+  if (last != null && last !== now) return true;
+  if (last === now) return false;
+  // First open (or cleared last-open): only reuse cache if it was written today
+  if (Object.keys(loadLocalChecks(now)).length) return false;
+  return true;
+}
+
+function markAppOpened() {
+  localStorage.setItem(LAST_OPEN_KEY, today());
+}
+
+function loadLocalChecks(date) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(localChecksKey(date)));
+    if (raw?.date !== date || !raw.checks) return {};
+    // Only trust cache written on this same calendar day
+    if (raw.updatedAt && localDateStr(new Date(raw.updatedAt)) !== date) return {};
+    return raw.checks;
+  } catch {}
+  return {};
+}
+
+function saveLocalChecks(date, checks) {
+  localStorage.setItem(localChecksKey(date), JSON.stringify({
+    date,
+    checks: { ...checks },
+    updatedAt: Date.now(),
+  }));
+}
+
+function loadLocalRatings(date) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(localRatingsKey(date)));
+    if (raw?.date !== date || !raw.ratings) return null;
+    if (raw.updatedAt && localDateStr(new Date(raw.updatedAt)) !== date) return null;
+    return raw.ratings;
+  } catch {}
+  return null;
+}
+
+function saveLocalRatings(date, r) {
+  localStorage.setItem(localRatingsKey(date), JSON.stringify({
+    date,
+    ratings: { ...r },
+    updatedAt: Date.now(),
+  }));
+}
+
+function buildTodayChecks(remoteChecks, localChecks, { freshDay = false } = {}) {
+  const merged = {};
+  habits.forEach(h => { merged[h.id] = false; });
+
+  if (freshDay) {
+    // New calendar day: start unchecked (remote + local are not applied)
+    return merged;
+  }
+
+  habits.forEach(h => {
+    if (remoteChecks[h.id] !== undefined) merged[h.id] = !!remoteChecks[h.id];
+  });
+  habits.forEach(h => {
+    if (localChecks[h.id] !== undefined) merged[h.id] = !!localChecks[h.id];
+  });
+  return merged;
+}
+
+async function syncCheckToRemote(logDate, habitId, checked) {
+  const existing = await api('daily_logs', 'GET', null,
+    `?log_date=eq.${logDate}&habit_id=eq.${habitId}&limit=1`);
+  if (existing?.length) {
+    await api('daily_logs', 'PATCH', { checked },
+      `?log_date=eq.${logDate}&habit_id=eq.${habitId}`);
+  } else {
+    await api('daily_logs', 'POST', { log_date: logDate, habit_id: habitId, checked });
+  }
+}
+
+async function flushPendingCheckSync() {
+  if (!pendingCheckSync.size || !activeLogDate) return;
+  const ids = [...pendingCheckSync];
+  pendingCheckSync.clear();
+  for (const id of ids) {
+    try {
+      await syncCheckToRemote(activeLogDate, id, !!todayChecks[id]);
+    } catch {
+      pendingCheckSync.add(id);
+    }
+  }
+}
+
+async function syncAllChecksToRemote(logDate) {
+  for (const h of habits) {
+    const local = loadLocalChecks(logDate);
+    if (local[h.id] === undefined) continue;
+    try {
+      await syncCheckToRemote(logDate, h.id, !!todayChecks[h.id]);
+    } catch {
+      pendingCheckSync.add(h.id);
+    }
+  }
+}
+
+function resetRatingsForNewDay() {
+  ratings = { ...DEFAULT_RATINGS };
+}
+
+function applyRatings(data) {
+  ratings = {
+    skin: data.skin_score || 0,
+    energy: data.energy_score || 0,
+    hip: data.pain_hip || 0,
+    knee: data.pain_knee || 0,
+    back: data.pain_back || 0,
+    weed: data.weed_used ?? null,
+    notes: data.notes || '',
+    sleep: data.sleep_time || '',
+  };
+}
+
+function checkDayRollover() {
+  const now = today();
+  if (now !== activeLogDate) {
+    gymState = {};
+    resetWaterForNewDay(now);
+    return loadTodayLogs({ freshDay: true }).then(() => {
+      renderToday();
+      updateHeaderDay();
+      markAppOpened();
+    });
+  }
+  return Promise.resolve();
+}
+
+function setupDayRollover() {
+  activeLogDate = today();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') checkDayRollover();
+  });
+  setInterval(checkDayRollover, 60000);
 }
 
 function getStartDate() {
@@ -312,11 +529,14 @@ async function scheduleNotifications() {
 // ─── INIT ──────────────────────────────────────────────────────────────────────
 async function init() {
   registerSW();
+  setupDayRollover();
+  if (isWaterCacheStale()) resetWaterForNewDay(today());
   await loadHabits();
-  await loadTodayLogs();
+  await loadTodayLogs({ freshDay: isNewCalendarDay() });
   renderToday();
   setupNav();
   document.getElementById('log-btn').addEventListener('click', saveDay);
+  flushPendingCheckSync();
   // Request notification permission after a short delay (not on first gesture)
   setTimeout(async () => {
     const granted = await requestNotifPermission();
@@ -339,24 +559,55 @@ async function loadHabits() {
   }
 }
 
-async function loadTodayLogs() {
+async function loadTodayLogs({ freshDay = false } = {}) {
+  const logDate = today();
+  const newDay = freshDay || isNewCalendarDay();
+  activeLogDate = logDate;
+
+  const remoteChecks = {};
+  let remoteRatings = null;
+
   try {
     const logs = await api('daily_logs', 'GET', null,
-      `?log_date=eq.${today()}&select=habit_id,checked,value`) || [];
-    todayChecks = {};
-    logs.forEach(l => { todayChecks[l.habit_id] = l.checked; });
+      `?log_date=eq.${logDate}&select=habit_id,checked&_ts=${Date.now()}`) || [];
+    logs.forEach(l => { remoteChecks[l.habit_id] = !!l.checked; });
 
     const r = await api('daily_ratings', 'GET', null,
-      `?log_date=eq.${today()}&limit=1`) || [];
-    if (r[0]) {
-      const d = r[0];
-      ratings = {
-        skin: d.skin_score || 0, energy: d.energy_score || 0,
-        hip: d.pain_hip || 0, knee: d.pain_knee || 0, back: d.pain_back || 0,
-        weed: d.weed_used, notes: d.notes || '', sleep: d.sleep_time || '',
-      };
+      `?log_date=eq.${logDate}&limit=1&_ts=${Date.now()}`) || [];
+    if (r[0]) remoteRatings = r[0];
+  } catch {}
+
+  const localChecks = loadLocalChecks(logDate);
+  todayChecks = buildTodayChecks(remoteChecks, localChecks, { freshDay: newDay });
+
+  if (newDay) {
+    resetWaterForNewDay(logDate);
+    localStorage.removeItem(localChecksKey(logDate));
+    saveLocalChecks(logDate, todayChecks);
+    resetRatingsForNewDay();
+    saveLocalRatings(logDate, ratings);
+    syncAllChecksToRemote(logDate).catch(() => {});
+  } else if (Object.keys(localChecks).length) {
+    saveLocalChecks(logDate, todayChecks);
+  }
+
+  const localRatings = loadLocalRatings(logDate);
+  if (!newDay && remoteRatings) {
+    applyRatings(remoteRatings);
+    saveLocalRatings(logDate, ratings);
+  } else if (!newDay && localRatings) {
+    ratings = { ...DEFAULT_RATINGS, ...localRatings };
+  } else if (!newDay) {
+    resetRatingsForNewDay();
+  }
+
+  habits.forEach(h => {
+    if (!newDay && localChecks[h.id] !== undefined && localChecks[h.id] !== remoteChecks[h.id]) {
+      pendingCheckSync.add(h.id);
     }
-  } catch (e) {}
+  });
+
+  markAppOpened();
 }
 
 // ─── UNIT HELPERS ─────────────────────────────────────────────────────────────
@@ -666,6 +917,10 @@ function ratingRowHTML(label, key, val, icon) {
     </div>`;
 }
 
+function persistRatings() {
+  if (activeLogDate) saveLocalRatings(activeLogDate, ratings);
+}
+
 function attachBedtimeListeners() {
   document.querySelectorAll('.star').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -675,25 +930,34 @@ function attachBedtimeListeners() {
       document.querySelectorAll(`.star[data-key="${key}"]`).forEach((s, i) => {
         s.classList.toggle('active', i < val);
       });
+      persistRatings();
     });
   });
 
   const sleepInput = document.getElementById('sleep-input');
-  if (sleepInput) sleepInput.addEventListener('change', e => { ratings.sleep = e.target.value; });
+  if (sleepInput) sleepInput.addEventListener('change', e => {
+    ratings.sleep = e.target.value;
+    persistRatings();
+  });
 
   const weedYes = document.getElementById('weed-yes');
   const weedNo = document.getElementById('weed-no');
   if (weedYes) weedYes.addEventListener('click', () => {
     ratings.weed = true;
     weedYes.classList.add('active'); weedNo.classList.remove('active');
+    persistRatings();
   });
   if (weedNo) weedNo.addEventListener('click', () => {
     ratings.weed = false;
     weedNo.classList.add('active'); weedYes.classList.remove('active');
+    persistRatings();
   });
 
   const notesInput = document.getElementById('notes-input');
-  if (notesInput) notesInput.addEventListener('input', e => { ratings.notes = e.target.value; });
+  if (notesInput) notesInput.addEventListener('input', e => {
+    ratings.notes = e.target.value;
+    persistRatings();
+  });
 }
 
 function toggleBlock(blockId) {
@@ -705,6 +969,8 @@ function toggleBlock(blockId) {
 }
 
 function toggleHabit(id) {
+  if (activeLogDate !== today()) checkDayRollover();
+  const logDate = today();
   todayChecks[id] = !todayChecks[id];
   const check = document.getElementById(`check-${id}`);
   const item = check?.closest('.habit-item');
@@ -712,21 +978,19 @@ function toggleHabit(id) {
   item?.classList.toggle('checked', todayChecks[id]);
   updateHeaderProgress();
   updateBlockCount(habits.find(h => h.id === id)?.block);
+  saveLocalChecks(logDate, todayChecks);
   autoSaveCheck(id, todayChecks[id]);
 }
 
 async function autoSaveCheck(id, checked) {
   const logDate = today();
+  activeLogDate = logDate;
+  saveLocalChecks(logDate, todayChecks);
   try {
-    const existing = await api('daily_logs', 'GET', null,
-      `?log_date=eq.${logDate}&habit_id=eq.${id}&limit=1`);
-    if (existing && existing.length > 0) {
-      await api('daily_logs', 'PATCH', { checked }, `?log_date=eq.${logDate}&habit_id=eq.${id}`);
-    } else {
-      await api('daily_logs', 'POST', { log_date: logDate, habit_id: id, checked });
-    }
-  } catch (e) {
-    // silent — will retry on Log Day
+    await syncCheckToRemote(logDate, id, checked);
+    pendingCheckSync.delete(id);
+  } catch {
+    pendingCheckSync.add(id);
   }
 }
 
@@ -764,20 +1028,15 @@ async function saveDay() {
 
   try {
     const logDate = today();
+    activeLogDate = logDate;
+    saveLocalChecks(logDate, todayChecks);
+    saveLocalRatings(logDate, ratings);
 
-    // Re-sync any checks that may have failed silently
     for (const h of habits) {
-      const checked = !!todayChecks[h.id];
-      const existing = await api('daily_logs', 'GET', null,
-        `?log_date=eq.${logDate}&habit_id=eq.${h.id}&limit=1`);
-      if (existing && existing.length > 0) {
-        await api('daily_logs', 'PATCH', { checked }, `?log_date=eq.${logDate}&habit_id=eq.${h.id}`);
-      } else {
-        await api('daily_logs', 'POST', { log_date: logDate, habit_id: h.id, checked });
-      }
+      await syncCheckToRemote(logDate, h.id, !!todayChecks[h.id]);
     }
+    pendingCheckSync.clear();
 
-    // Save ratings
     const ratingPayload = {
       log_date: logDate,
       skin_score: ratings.skin || null,
@@ -790,7 +1049,7 @@ async function saveDay() {
       sleep_time: ratings.sleep || null,
     };
     const existingRating = await api('daily_ratings', 'GET', null, `?log_date=eq.${logDate}&limit=1`);
-    if (existingRating && existingRating.length > 0) {
+    if (existingRating?.length) {
       await api('daily_ratings', 'PATCH', ratingPayload, `?log_date=eq.${logDate}`);
     } else {
       await api('daily_ratings', 'POST', ratingPayload);
@@ -1124,84 +1383,242 @@ async function renderGymHistory() {
 }
 
 // ─── PROGRESS SCREEN ──────────────────────────────────────────────────────────
+function getProgramDaysElapsed() {
+  const n = dayNumber();
+  return n < 1 ? 0 : Math.min(n, 30);
+}
+
+function getLoggedDateSet(ratings) {
+  return new Set((ratings || []).map(r => r.log_date));
+}
+
+function calcLogStreak(ratings) {
+  const logged = getLoggedDateSet(ratings);
+  if (!logged.size) return 0;
+  let d = today();
+  if (!logged.has(d)) d = addDaysLocal(d, -1);
+  let streak = 0;
+  for (let i = 0; i < 30; i++) {
+    if (logged.has(d)) {
+      streak++;
+      d = addDaysLocal(d, -1);
+    } else break;
+  }
+  return streak;
+}
+
+function buildHabitCompletionByDate(logs) {
+  const byDate = {};
+  (logs || []).forEach(l => {
+    if (!byDate[l.log_date]) byDate[l.log_date] = { done: 0, total: 0 };
+    byDate[l.log_date].total++;
+    if (l.checked) byDate[l.log_date].done++;
+  });
+  return Object.entries(byDate)
+    .map(([date, v]) => ({ date, pct: v.total ? Math.round((v.done / v.total) * 100) : 0 }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function findLatestPhotoDataUrl() {
+  let latestKey = null;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith('photo-')) continue;
+    if (!latestKey || key > latestKey) latestKey = key;
+  }
+  return latestKey ? localStorage.getItem(latestKey) : null;
+}
+
 async function renderProgress() {
-  await loadProgressData();
-  renderStats();
-  renderCharts();
-  renderWelcomeBack();
+  setProgressLoading(true);
+  try {
+    if (!habits.length) await loadHabits();
+    await loadProgressData();
+    renderStats();
+    renderProgressInsights();
+    renderCharts();
+    renderProgressPhotos();
+    renderWelcomeBack();
+  } finally {
+    setProgressLoading(false);
+  }
+}
+
+function setProgressLoading(loading) {
+  ['stat-streak', 'stat-compliance', 'stat-habits', 'stat-gym'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && loading) el.textContent = '…';
+  });
 }
 
 async function loadProgressData() {
+  const cutoff = addDaysLocal(today(), -45);
   try {
-    const [ratings30, weeklyLogs, gymLogs30] = await Promise.all([
-      api('daily_ratings', 'GET', null, '?order=log_date.asc&limit=30'),
+    const [ratingsRaw, weeklyLogs, gymLogs30, habitLogs] = await Promise.all([
+      api('daily_ratings', 'GET', null, '?order=log_date.desc&limit=45'),
       api('weekly_logs', 'GET', null, '?order=week_start.asc&limit=12'),
       api('gym_logs', 'GET', null, '?select=exercise,weight_kg,sets_data,reps,log_date&order=log_date.asc&limit=500'),
+      api('daily_logs', 'GET', null, `?log_date=gte.${cutoff}&select=log_date,habit_id,checked`),
     ]);
-    progressData = { ratings30: ratings30 || [], weeklyLogs: weeklyLogs || [], gymLogs30: gymLogs30 || [] };
-  } catch (e) { progressData = { ratings30: [], weeklyLogs: [], gymLogs30: [] }; }
+    const ratings30 = (ratingsRaw || []).slice().sort((a, b) => a.log_date.localeCompare(b.log_date));
+    progressData = {
+      ratings30,
+      weeklyLogs: weeklyLogs || [],
+      gymLogs30: gymLogs30 || [],
+      habitLogs: habitLogs || [],
+      habitByDate: buildHabitCompletionByDate(habitLogs),
+    };
+  } catch (e) {
+    progressData = { ratings30: [], weeklyLogs: [], gymLogs30: [], habitLogs: [], habitByDate: [] };
+  }
 }
 
 function renderStats() {
   const d = progressData;
-  const day = dayNumber();
-  const totalDays = d.ratings30.length;
-  const compliance = totalDays > 0
-    ? Math.round((d.ratings30.filter(r => r.skin_score || r.energy_score).length / Math.min(day, 30)) * 100)
-    : 0;
-  const skinScores = d.ratings30.filter(r => r.skin_score).map(r => r.skin_score);
-  const avgSkin = skinScores.length > 0 ? (skinScores.reduce((a,b) => a+b, 0) / skinScores.length).toFixed(1) : '—';
-  const gymSessions = new Set(d.gymLogs30.map(g => g.log_date)).size;
+  const elapsed = getProgramDaysElapsed();
+  const loggedDates = getLoggedDateSet(d.ratings30);
+  const daysLogged = [...loggedDates].filter(ds => {
+    const start = getStartDate();
+    return ds >= start && ds <= today();
+  }).length;
+  const compliance = elapsed > 0 ? Math.round((daysLogged / elapsed) * 100) : 0;
 
-  // Streak
-  let streak = 0;
-  const today_ = today();
-  for (let i = 0; i < 30; i++) {
-    const d = new Date(today_);
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().split('T')[0];
-    const found = progressData.ratings30.find(r => r.log_date === dateStr);
-    if (found) streak++; else break;
+  const weekCutoff = addDaysLocal(today(), -6);
+  const habitWeek = d.habitByDate.filter(h => h.date >= weekCutoff);
+  const avgHabits = habitWeek.length
+    ? Math.round(habitWeek.reduce((s, h) => s + h.pct, 0) / habitWeek.length)
+    : null;
+
+  const gymCutoff = addDaysLocal(today(), -29);
+  const gymSessions = new Set(
+    d.gymLogs30.filter(g => g.log_date >= gymCutoff).map(g => g.log_date)
+  ).size;
+
+  document.getElementById('stat-streak').textContent = calcLogStreak(d.ratings30);
+  document.getElementById('stat-compliance').textContent = elapsed
+    ? `${daysLogged}/${elapsed}`
+    : '—';
+  document.getElementById('stat-compliance').title = elapsed
+    ? `${compliance}% of program days logged (Log Day)`
+    : '';
+  document.getElementById('stat-habits').textContent = avgHabits != null ? avgHabits + '%' : '—';
+  document.getElementById('stat-gym').textContent = gymSessions;
+}
+
+function renderProgressInsights() {
+  const el = document.getElementById('progress-insights');
+  if (!el) return;
+  const d = progressData;
+  const elapsed = getProgramDaysElapsed();
+  const ratingsByDate = Object.fromEntries(d.ratings30.map(r => [r.log_date, r]));
+  const habitByDate = Object.fromEntries(d.habitByDate.map(h => [h.date, h.pct]));
+  const gymDates = new Set(d.gymLogs30.map(g => g.log_date));
+
+  const skinScores = d.ratings30.filter(r => r.skin_score).map(r => r.skin_score);
+  const energyScores = d.ratings30.filter(r => r.energy_score).map(r => r.energy_score);
+  const avgSkin = skinScores.length
+    ? (skinScores.reduce((a, b) => a + b, 0) / skinScores.length).toFixed(1)
+    : null;
+  const avgEnergy = energyScores.length
+    ? (energyScores.reduce((a, b) => a + b, 0) / energyScores.length).toFixed(1)
+    : null;
+
+  const summaryParts = [];
+  if (elapsed > 0) summaryParts.push(`Day ${Math.min(dayNumber(), 30)} of 30`);
+  if (avgSkin) summaryParts.push(`Avg skin ${avgSkin}/5`);
+  if (avgEnergy) summaryParts.push(`Avg energy ${avgEnergy}/5`);
+
+  let rows = '';
+  for (let i = 6; i >= 0; i--) {
+    const ds = addDaysLocal(today(), -i);
+    const label = i === 0 ? 'Today' : ds.slice(5);
+    const pct = habitByDate[ds];
+    const rating = ratingsByDate[ds];
+    const barW = pct != null ? pct : 0;
+    const skin = rating?.skin_score ? `${rating.skin_score}` : '—';
+    const gym = gymDates.has(ds) ? '🏋️' : '';
+    rows += `
+      <div class="progress-insight-row">
+        <span>${label}</span>
+        <div class="bar-wrap"><div class="bar-fill" style="width:${barW}%"></div></div>
+        <span class="skin-pill">${skin}</span>
+        <span class="gym-dot">${gym}</span>
+      </div>`;
   }
 
-  document.getElementById('stat-streak').textContent = streak;
-  document.getElementById('stat-compliance').textContent = compliance + '%';
-  document.getElementById('stat-skin').textContent = avgSkin;
-  document.getElementById('stat-gym').textContent = gymSessions;
+  el.innerHTML = `
+    <div class="insight-head">${summaryParts.join(' · ') || 'Your 30-day journey'}</div>
+    <div style="display:grid;grid-template-columns:52px 1fr 36px 28px;gap:6px;font-size:10px;color:#aaa;margin-bottom:4px;">
+      <span>Date</span><span>Habits</span><span style="text-align:right">Skin</span><span style="text-align:center">Gym</span>
+    </div>
+    ${rows || '<div style="color:#bbb;padding:8px 0;">Log habits and tap Log Day to fill this in.</div>'}`;
 }
 
 function renderCharts() {
   const d = progressData;
+  const weightTitle = document.getElementById('chart-weight-title');
+  if (weightTitle) weightTitle.textContent = `Body weight (${unitLabel()})`;
 
-  // Weight chart
   drawLineChart('chart-weight',
     d.weeklyLogs.filter(w => w.weight_kg).map(w => ({ x: w.week_start.slice(5), y: toDisplay(w.weight_kg) })),
     unitLabel(), '#4caf50');
 
-  // Skin score
-  drawLineChart('chart-skin',
-    d.ratings30.filter(r => r.skin_score).map(r => ({ x: r.log_date.slice(5), y: r.skin_score })),
-    '', '#c8a0f5', 1, 5);
+  drawDualLineChart('chart-skin', [
+    {
+      data: d.ratings30.filter(r => r.skin_score).map(r => ({ x: r.log_date.slice(5), y: r.skin_score })),
+      color: '#c8a0f5',
+      label: 'Skin',
+    },
+    {
+      data: d.ratings30.filter(r => r.energy_score).map(r => ({ x: r.log_date.slice(5), y: r.energy_score })),
+      color: '#a0d4f5',
+      label: 'Energy',
+    },
+  ], 1, 5);
 
-  // Pain levels
+  const habitCard = document.getElementById('habit-chart-card');
+  const habitCutoff = addDaysLocal(today(), -13);
+  const habitPts = d.habitByDate
+    .filter(h => h.date >= habitCutoff)
+    .map(h => ({ x: h.date.slice(5), y: h.pct }));
+  if (habitCard) {
+    habitCard.style.display = habitPts.length ? 'block' : 'none';
+    if (habitPts.length) drawLineChart('chart-habits', habitPts, '%', '#7cb342', 0, 100);
+  }
+
   drawMultiLineChart('chart-pain', d.ratings30, [
     { key: 'pain_hip', color: '#f5a0a0', label: 'Hip' },
     { key: 'pain_knee', color: '#f5c8a0', label: 'Knee' },
     { key: 'pain_back', color: '#a0c8f5', label: 'Back' },
   ]);
 
-  // Gym frequency
   const gymByWeek = {};
   d.gymLogs30.forEach(g => {
-    const d = new Date(g.log_date);
-    const wk = getWeekStart(d);
+    const wk = getWeekStart(g.log_date);
     gymByWeek[wk] = (gymByWeek[wk] || new Set()).add(g.log_date);
   });
   drawLineChart('chart-gym',
     Object.entries(gymByWeek).sort().map(([k, v]) => ({ x: k.slice(5), y: v.size })),
-    ' sessions', '#4caf50', 0, 5);
+    '', '#4caf50', 0, 7);
 
   renderLiftProgressChart();
+}
+
+function renderProgressPhotos() {
+  const startSlot = document.getElementById('photo-start');
+  const latestSlot = document.getElementById('photo-latest');
+  if (!startSlot || !latestSlot) return;
+
+  const startWk = getWeekStart(parseLocalDate(getStartDate()));
+  const startPhoto = localStorage.getItem(`photo-${startWk}`);
+  if (startPhoto) {
+    startSlot.innerHTML = `<img src="${startPhoto}" alt="Day 1 photo"><span class="photo-slot-label">Day 1</span>`;
+  }
+
+  const latestPhoto = findLatestPhotoDataUrl();
+  if (latestPhoto) {
+    latestSlot.innerHTML = `<img src="${latestPhoto}" alt="Latest weekly photo"><span class="photo-slot-label">Latest</span>`;
+  }
 }
 
 function renderLiftProgressChart() {
@@ -1253,35 +1670,54 @@ function renderLiftProgressChart() {
 }
 
 function getWeekStart(date) {
-  const d = new Date(date);
+  const d = date instanceof Date ? new Date(date) : parseLocalDate(typeof date === 'string' ? date : localDateStr(date));
   d.setDate(d.getDate() - d.getDay());
-  return d.toISOString().split('T')[0];
+  return localDateStr(d);
+}
+
+function prepareChartCanvas(canvas) {
+  const cssW = canvas.parentElement?.clientWidth || 320;
+  const cssH = parseInt(canvas.getAttribute('height'), 10) || 140;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  canvas.style.width = '100%';
+  canvas.style.height = cssH + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, width: cssW, height: cssH };
+}
+
+function drawChartEmpty(ctx, W, H, message) {
+  ctx.fillStyle = '#ccc';
+  ctx.font = '13px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(message, W / 2, H / 2);
 }
 
 function drawLineChart(id, data, unit, color, yMin, yMax) {
   const canvas = document.getElementById(id);
   if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
+  const { ctx, width: W, height: H } = prepareChartCanvas(canvas);
   ctx.clearRect(0, 0, W, H);
 
-  if (data.length < 2) {
-    ctx.fillStyle = '#ccc';
-    ctx.font = '13px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Not enough data yet', W/2, H/2);
+  if (!data.length) {
+    drawChartEmpty(ctx, W, H, 'No data yet — log in Settings or Log Day');
     return;
   }
 
   const vals = data.map(d => d.y);
-  const min = yMin !== undefined ? yMin : Math.min(...vals) * 0.95;
-  const max = yMax !== undefined ? yMax : Math.max(...vals) * 1.05;
+  let min = yMin !== undefined ? yMin : Math.min(...vals) * 0.95;
+  let max = yMax !== undefined ? yMax : Math.max(...vals) * 1.05;
+  if (max <= min) max = min + 1;
+
   const pad = { top: 12, right: 12, bottom: 28, left: 38 };
   const cW = W - pad.left - pad.right;
   const cH = H - pad.top - pad.bottom;
+  const range = max - min;
 
-  const xScale = i => pad.left + (i / (data.length - 1)) * cW;
-  const yScale = v => pad.top + cH - ((v - min) / (max - min)) * cH;
+  const xScale = i => pad.left + (data.length === 1 ? cW / 2 : (i / (data.length - 1)) * cW);
+  const yScale = v => pad.top + cH - ((v - min) / range) * cH;
 
   // Grid lines
   ctx.strokeStyle = '#f0ede9';
@@ -1326,32 +1762,79 @@ function drawLineChart(id, data, unit, color, yMin, yMax) {
   });
 }
 
-function drawMultiLineChart(id, rows, series) {
+function drawDualLineChart(id, lines, yMin, yMax) {
   const canvas = document.getElementById(id);
   if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
+  const { ctx, width: W, height: H } = prepareChartCanvas(canvas);
   ctx.clearRect(0, 0, W, H);
 
-  const hasData = rows.some(r => series.some(s => r[s.key]));
-  if (!hasData) {
-    ctx.fillStyle = '#ccc';
-    ctx.font = '13px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Not enough data yet', W/2, H/2);
+  const allPts = lines.flatMap(l => l.data);
+  if (!allPts.length) {
+    drawChartEmpty(ctx, W, H, 'Rate skin & energy when you Log Day');
     return;
   }
 
-  const pad = { top: 12, right: 12, bottom: 28, left: 28 };
+  const pad = { top: 12, right: 12, bottom: 32, left: 28 };
   const cW = W - pad.left - pad.right;
   const cH = H - pad.top - pad.bottom;
+  const min = yMin ?? 1;
+  const max = yMax ?? 5;
+  const range = max - min;
+  const yScale = v => pad.top + cH - ((v - min) / range) * cH;
 
-  const xScale = i => pad.left + (i / Math.max(rows.length - 1, 1)) * cW;
+  lines.forEach(line => {
+    const data = line.data;
+    if (!data.length) return;
+    const xScale = i => pad.left + (data.length === 1 ? cW / 2 : (i / (data.length - 1)) * cW);
+    ctx.strokeStyle = line.color;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    data.forEach((d, i) => {
+      if (i === 0) ctx.moveTo(xScale(i), yScale(d.y));
+      else ctx.lineTo(xScale(i), yScale(d.y));
+    });
+    ctx.stroke();
+    ctx.fillStyle = line.color;
+    data.forEach((d, i) => {
+      ctx.beginPath();
+      ctx.arc(xScale(i), yScale(d.y), 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  });
+
+  ctx.font = '10px sans-serif';
+  lines.forEach((line, i) => {
+    if (!line.data.length) return;
+    ctx.fillStyle = line.color;
+    ctx.fillRect(pad.left + i * 58, H - 14, 8, 8);
+    ctx.fillStyle = '#888';
+    ctx.fillText(line.label, pad.left + i * 58 + 11, H - 7);
+  });
+}
+
+function drawMultiLineChart(id, rows, series) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  const { ctx, width: W, height: H } = prepareChartCanvas(canvas);
+  ctx.clearRect(0, 0, W, H);
+
+  const dated = rows.filter(r => series.some(s => r[s.key]));
+  if (!dated.length) {
+    drawChartEmpty(ctx, W, H, 'Pain scores appear after Log Day');
+    return;
+  }
+
+  const pad = { top: 12, right: 12, bottom: 32, left: 28 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+  const n = dated.length;
+  const xScale = i => pad.left + (n === 1 ? cW / 2 : (i / (n - 1)) * cW);
   const yScale = v => pad.top + cH - ((v - 1) / 4) * cH;
 
   series.forEach(s => {
-    const pts = rows.map((r, i) => ({ i, v: r[s.key] })).filter(p => p.v);
-    if (pts.length < 2) return;
+    const pts = dated.map((r, i) => ({ i, v: r[s.key] })).filter(p => p.v);
+    if (!pts.length) return;
     ctx.strokeStyle = s.color;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -1362,27 +1845,33 @@ function drawMultiLineChart(id, rows, series) {
     ctx.stroke();
   });
 
-  // Legend
+  ctx.fillStyle = '#aaa';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  [0, Math.floor((n - 1) / 2), n - 1].forEach(i => {
+    if (dated[i]) ctx.fillText(dated[i].log_date.slice(5), xScale(i), H - 8);
+  });
+
   ctx.font = '10px sans-serif';
   series.forEach((s, i) => {
     ctx.fillStyle = s.color;
-    ctx.fillRect(pad.left + i * 55, H - 10, 8, 8);
+    ctx.fillRect(pad.left + i * 55, H - 14, 8, 8);
     ctx.fillStyle = '#888';
-    ctx.fillText(s.label, pad.left + i * 55 + 11, H - 3);
+    ctx.fillText(s.label, pad.left + i * 55 + 11, H - 7);
   });
 }
 
 function renderWelcomeBack() {
   const wb = document.getElementById('welcome-back');
-  const day = dayNumber();
   const d = progressData;
+  if (dayNumber() < 2) {
+    wb.style.display = 'none';
+    return;
+  }
 
-  // Check if 2+ days missed
   let missed = 0;
   for (let i = 1; i <= 3; i++) {
-    const dt = new Date(today());
-    dt.setDate(dt.getDate() - i);
-    const ds = dt.toISOString().split('T')[0];
+    const ds = addDaysLocal(today(), -i);
     if (!d.ratings30.find(r => r.log_date === ds)) missed++;
   }
 
@@ -2005,6 +2494,9 @@ function setupNav() {
       if (screen === 'gym') renderGym();
       if (screen === 'progress') renderProgress();
       if (screen === 'settings') renderSettings();
+      if (screen === 'today') {
+        checkDayRollover().then(() => flushPendingCheckSync());
+      }
     });
   });
 

@@ -45,20 +45,27 @@
   </div>
 
   <div class="stats-row">
-    <div class="stat-card"><div class="stat-value" id="stat-streak">—</div><div class="stat-label">Streak</div></div>
-    <div class="stat-card"><div class="stat-value" id="stat-compliance">—</div><div class="stat-label">Compliance</div></div>
-    <div class="stat-card"><div class="stat-value" id="stat-skin">—</div><div class="stat-label">Avg Skin</div></div>
-    <div class="stat-card"><div class="stat-value" id="stat-gym">—</div><div class="stat-label">Gym Days</div></div>
+    <div class="stat-card"><div class="stat-value" id="stat-streak">—</div><div class="stat-label">Log streak</div></div>
+    <div class="stat-card"><div class="stat-value" id="stat-compliance">—</div><div class="stat-label">Days logged</div></div>
+    <div class="stat-card"><div class="stat-value" id="stat-habits">—</div><div class="stat-label">Habits (7d)</div></div>
+    <div class="stat-card"><div class="stat-value" id="stat-gym">—</div><div class="stat-label">Gym (30d)</div></div>
   </div>
 
+  <div id="progress-insights" class="progress-insights"></div>
+
   <div class="chart-card">
-    <div class="chart-title">Weight (kg)</div>
+    <div class="chart-title" id="chart-weight-title">Body weight</div>
     <canvas id="chart-weight" width="420" height="140"></canvas>
   </div>
 
   <div class="chart-card">
-    <div class="chart-title">Skin Score</div>
+    <div class="chart-title">Skin &amp; energy</div>
     <canvas id="chart-skin" width="420" height="140"></canvas>
+  </div>
+
+  <div class="chart-card" id="habit-chart-card" style="display:none">
+    <div class="chart-title">Habit completion (14 days)</div>
+    <canvas id="chart-habits" width="420" height="120"></canvas>
   </div>
 
   <div class="chart-card">
@@ -228,7 +235,8 @@ async function handlePhotoUpload(event) {
     const wk = getWeekStart(new Date());
     localStorage.setItem(`photo-${wk}`, e.target.result);
     document.getElementById('photo-latest').innerHTML =
-      `<img src="${e.target.result}" alt="Weekly photo">`;
+      `<img src="${e.target.result}" alt="Weekly photo"><span class="photo-slot-label">Latest</span>`;
+    if (typeof renderProgressPhotos === 'function') renderProgressPhotos();
     showToast('Photo saved locally');
   };
   reader.readAsDataURL(file);
@@ -236,8 +244,12 @@ async function handlePhotoUpload(event) {
 
 function getWeekStart(date) {
   const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() - d.getDay());
-  return d.toISOString().split('T')[0];
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 </script>
 <script src="app.js"></script>
