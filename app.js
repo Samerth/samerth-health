@@ -15,65 +15,183 @@ let todayChecks = {}; // habitId -> boolean
 let ratings = { ...DEFAULT_RATINGS };
 let gymState = {}; // exerciseName -> { sets: [{weight_kg, reps}] } | physio key -> { done }
 let progressData = {};
-let useKg = localStorage.getItem('useKg') !== 'false';
+let useKg = true;
 let activeLogDate = null; // which calendar day todayChecks belongs to
 let pendingCheckSync = new Set();
 
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
-function getHiddenBlocks() {
-  try { return JSON.parse(localStorage.getItem('hiddenBlocks')) || []; } catch { return []; }
+// ─── APP STORE (settings, water, photos — one Supabase table) ─────────────────
+const appStore = { settings: {}, water: {}, photos: { start: null, weeks: {} } };
+let appStoreReady = false;
+const PHOTO_BUCKET = 'progress-photos';
+
+function defaultAppSettings() {
+  return {
+    startDate: DEFAULT_START,
+    hiddenBlocks: [],
+    notifSettings: { ...NOTIF_DEFAULTS },
+    useKg: true,
+    waterGoal: 8,
+    gymConfig: null,
+    gymOverrides: {},
+    liftChartExercise: null,
+  };
 }
-function setHiddenBlocks(arr) { localStorage.setItem('hiddenBlocks', JSON.stringify(arr)); }
 
-function getWaterGoal() { return parseInt(localStorage.getItem('waterGoal')) || 8; }
+function readLocalJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
-function waterStorageKey(date) { return 'water-' + date; }
+async function saveStoreKey(key, value) {
+  appStore[key === 'settings' ? 'settings' : key === 'water' ? 'water' : 'photos'] = value;
+  localStorage.setItem(`store-${key}`, JSON.stringify(value));
+  try {
+    const existing = await api('app_storage', 'GET', null, `?key=eq.${encodeURIComponent(key)}&limit=1`);
+    const payload = { value, updated_at: new Date().toISOString() };
+    if (existing?.length) {
+      await api('app_storage', 'PATCH', payload, `?key=eq.${encodeURIComponent(key)}`);
+    } else {
+      await api('app_storage', 'POST', { key, ...payload });
+    }
+  } catch {
+    // Offline — local cache kept
+  }
+}
+
+function collectLegacyWater() {
+  const water = { ...appStore.water };
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k?.startsWith('water-') || k === 'waterGoal') continue;
+    const date = k.slice(6);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    try {
+      const parsed = JSON.parse(localStorage.getItem(k));
+      water[date] = typeof parsed === 'number' ? parsed : (parsed?.count || 0);
+    } catch {
+      const n = parseInt(localStorage.getItem(k), 10);
+      if (Number.isFinite(n)) water[date] = n;
+    }
+  }
+  return water;
+}
+
+function collectLegacyGymOverrides() {
+  const gymOverrides = { ...(appStore.settings.gymOverrides || {}) };
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k?.startsWith('gymOverride-')) continue;
+    gymOverrides[k.slice(12)] = localStorage.getItem(k);
+  }
+  return gymOverrides;
+}
+
+async function migrateLocalStorageToStore() {
+  const settings = { ...defaultAppSettings(), ...appStore.settings };
+  if (localStorage.getItem('startDate')) settings.startDate = localStorage.getItem('startDate');
+  settings.hiddenBlocks = readLocalJson('hiddenBlocks', settings.hiddenBlocks);
+  settings.notifSettings = readLocalJson('notifSettings', settings.notifSettings);
+  if (localStorage.getItem('useKg') != null) settings.useKg = localStorage.getItem('useKg') !== 'false';
+  if (localStorage.getItem('waterGoal')) settings.waterGoal = parseInt(localStorage.getItem('waterGoal'), 10) || 8;
+  settings.gymConfig = readLocalJson('gymConfig', readLocalJson('gymPlan', null));
+  settings.gymOverrides = collectLegacyGymOverrides();
+  if (localStorage.getItem('liftChartExercise')) settings.liftChartExercise = localStorage.getItem('liftChartExercise');
+
+  appStore.settings = settings;
+  appStore.water = { ...collectLegacyWater(), ...appStore.water };
+
+  await saveStoreKey('settings', appStore.settings);
+  await saveStoreKey('water', appStore.water);
+}
+
+async function initAppStore() {
+  try {
+    const rows = await api('app_storage', 'GET', null, '?select=key,value') || [];
+    rows.forEach(row => {
+      if (row.key === 'settings') appStore.settings = { ...defaultAppSettings(), ...row.value };
+      if (row.key === 'water') appStore.water = row.value || {};
+      if (row.key === 'photos') appStore.photos = { start: null, weeks: {}, preview: { start: null, weeks: {} }, ...row.value };
+    });
+    if (!appStore.photos?.preview) appStore.photos.preview = { start: null, weeks: {} };
+    migrateLegacyPhotosToPreview();
+    if (!rows.length) {
+      appStore.settings = defaultAppSettings();
+      await migrateLocalStorageToStore();
+    } else if (!Object.keys(appStore.settings || {}).length) {
+      appStore.settings = defaultAppSettings();
+    }
+  } catch {
+    appStore.settings = {
+      ...defaultAppSettings(),
+      startDate: localStorage.getItem('startDate') || DEFAULT_START,
+      hiddenBlocks: readLocalJson('hiddenBlocks', []),
+      notifSettings: readLocalJson('notifSettings', { ...NOTIF_DEFAULTS }),
+      useKg: localStorage.getItem('useKg') !== 'false',
+      waterGoal: parseInt(localStorage.getItem('waterGoal'), 10) || 8,
+    };
+    appStore.water = collectLegacyWater();
+    migrateLegacyPhotosToPreview();
+  }
+
+  useKg = appStore.settings.useKg !== false;
+  gymConfig = loadGymConfig();
+
+  const cachedPhotos = readLocalJson('store-photos', null);
+  if (cachedPhotos) {
+    appStore.photos = {
+      start: null,
+      weeks: {},
+      preview: { start: null, weeks: {} },
+      ...appStore.photos,
+      ...cachedPhotos,
+      preview: {
+        start: null,
+        weeks: {},
+        ...(appStore.photos?.preview || {}),
+        ...(cachedPhotos.preview || {}),
+      },
+    };
+  }
+  migrateLegacyPhotosToPreview();
+  appStoreReady = true;
+}
+
+function getHiddenBlocks() {
+  return appStore.settings.hiddenBlocks || [];
+}
+
+function setHiddenBlocks(arr) {
+  appStore.settings.hiddenBlocks = arr;
+  saveStoreKey('settings', appStore.settings);
+}
+
+function getWaterGoal() {
+  return parseInt(appStore.settings.waterGoal, 10) || 8;
+}
 
 function getWaterCount() {
   const date = today();
-  const raw = localStorage.getItem(waterStorageKey(date));
-  if (raw == null) return 0;
-  try {
-    const parsed = JSON.parse(raw);
-    if (typeof parsed === 'number') return parsed;
-    if (parsed?.date !== date) return 0;
-    if (parsed.updatedAt && localDateStr(new Date(parsed.updatedAt)) !== date) return 0;
-    return parsed.count || 0;
-  } catch {
-    const n = parseInt(raw, 10);
-    if (!Number.isFinite(n)) return 0;
-    // Legacy plain-number keys: ignore if we have not opened the app on this date yet
-    const last = localStorage.getItem(LAST_OPEN_KEY);
-    return last === date ? n : 0;
-  }
+  return appStore.water[date] || 0;
 }
 
 function setWaterCount(n) {
   const date = today();
-  localStorage.setItem(waterStorageKey(date), JSON.stringify({
-    date,
-    count: n,
-    updatedAt: Date.now(),
-  }));
+  appStore.water[date] = n;
+  localStorage.setItem(`water-${date}`, JSON.stringify({ date, count: n, updatedAt: Date.now() }));
+  saveStoreKey('water', appStore.water);
 }
 
 function resetWaterForNewDay(date) {
-  localStorage.removeItem(waterStorageKey(date));
+  delete appStore.water[date];
+  localStorage.removeItem(`water-${date}`);
 }
 
 function isWaterCacheStale() {
-  const date = today();
-  const raw = localStorage.getItem(waterStorageKey(date));
-  if (raw == null) return false;
-  try {
-    const parsed = JSON.parse(raw);
-    if (typeof parsed === 'number') return true;
-    if (parsed?.date !== date) return true;
-    if (!parsed.updatedAt) return true;
-    return localDateStr(new Date(parsed.updatedAt)) !== date;
-  } catch {
-    return true;
-  }
+  return false;
 }
 
 // ─── GYM PLAN ─────────────────────────────────────────────────────────────────
@@ -157,13 +275,15 @@ function normalizeGymConfig(raw) {
 }
 
 function loadGymConfig() {
+  if (appStore.settings?.gymConfig?.templates) {
+    return normalizeGymConfig(appStore.settings.gymConfig);
+  }
   try {
-    const saved = JSON.parse(localStorage.getItem('gymConfig'));
+    const saved = readLocalJson('gymConfig', null);
     if (saved?.templates && saved?.schedule) return normalizeGymConfig(saved);
   } catch {}
-  // migrate legacy gymPlan (keyed by weekday number)
   try {
-    const old = JSON.parse(localStorage.getItem('gymPlan'));
+    const old = readLocalJson('gymPlan', null);
     if (old?.['1']) {
       return normalizeGymConfig({
         templates: { a: old['1'], b: old['2'], c: old['4'], d: old['5'] },
@@ -175,30 +295,36 @@ function loadGymConfig() {
 }
 
 function refreshGymConfig() {
-  const next = normalizeGymConfig(JSON.parse(localStorage.getItem('gymConfig') || 'null'));
+  const next = loadGymConfig();
   const changed = JSON.stringify(next) !== JSON.stringify(gymConfig);
   gymConfig = next;
   if (changed) saveGymConfig();
   return gymConfig;
 }
 
-let gymConfig = loadGymConfig();
-saveGymConfig();
+let gymConfig = normalizeGymConfig(null);
 
 function saveGymConfig() {
+  appStore.settings.gymConfig = gymConfig;
   localStorage.setItem('gymConfig', JSON.stringify(gymConfig));
+  saveStoreKey('settings', appStore.settings);
 }
 
 function getGymOverride() {
-  return localStorage.getItem('gymOverride-' + today()) || null;
+  return appStore.settings.gymOverrides?.[today()] || null;
 }
 
 function setGymOverride(templateId) {
-  localStorage.setItem('gymOverride-' + today(), templateId);
+  if (!appStore.settings.gymOverrides) appStore.settings.gymOverrides = {};
+  appStore.settings.gymOverrides[today()] = templateId;
+  saveStoreKey('settings', appStore.settings);
 }
 
 function clearGymOverride() {
-  localStorage.removeItem('gymOverride-' + today());
+  if (appStore.settings.gymOverrides) {
+    delete appStore.settings.gymOverrides[today()];
+    saveStoreKey('settings', appStore.settings);
+  }
 }
 
 function getScheduledTemplateId() {
@@ -465,7 +591,7 @@ function setupDayRollover() {
 }
 
 function getStartDate() {
-  return localStorage.getItem('startDate') || DEFAULT_START;
+  return appStore.settings.startDate || localStorage.getItem('startDate') || DEFAULT_START;
 }
 
 function dayNumber() {
@@ -531,13 +657,13 @@ const NOTIF_DEFAULTS = {
 let notifSchedules = {}; // key -> setTimeout id
 
 function getNotifSettings() {
-  try {
-    return JSON.parse(localStorage.getItem('notifSettings')) || { ...NOTIF_DEFAULTS };
-  } catch { return { ...NOTIF_DEFAULTS }; }
+  return appStore.settings.notifSettings || { ...NOTIF_DEFAULTS };
 }
 
 function saveNotifSettings(s) {
+  appStore.settings.notifSettings = s;
   localStorage.setItem('notifSettings', JSON.stringify(s));
+  saveStoreKey('settings', appStore.settings);
 }
 
 async function requestNotifPermission() {
@@ -584,12 +710,14 @@ async function scheduleNotifications() {
 // ─── INIT ──────────────────────────────────────────────────────────────────────
 async function init() {
   registerSW();
+  await initAppStore();
   setupDayRollover();
   if (isWaterCacheStale()) resetWaterForNewDay(today());
   await loadHabits();
   await loadTodayLogs({ freshDay: isNewCalendarDay() });
   renderToday();
   setupNav();
+  setupPhotoCapture();
   document.getElementById('log-btn').addEventListener('click', saveDay);
   flushPendingCheckSync();
   // Request notification permission after a short delay (not on first gesture)
@@ -874,7 +1002,7 @@ function renderToday() {
   BLOCK_ORDER.forEach(blockId => {
     if (hidden.includes(blockId)) return; // user hid this block
     const meta = BLOCK_META[blockId];
-    const blockHabits = habits.filter(h => h.block === blockId);
+    const blockHabits = getBlockHabits(blockId);
 
     const checkedCount = blockHabits.filter(h => todayChecks[h.id]).length;
     const isOpen = blockId === currentBlock;
@@ -1051,7 +1179,7 @@ async function autoSaveCheck(id, checked) {
 
 function updateBlockCount(blockId) {
   if (!blockId) return;
-  const blockHabits = habits.filter(h => h.block === blockId);
+  const blockHabits = getBlockHabits(blockId);
   const checked = blockHabits.filter(h => todayChecks[h.id]).length;
   const header = document.querySelector(`[data-block="${blockId}"] .block-meta`);
   if (!header) return;
@@ -1383,8 +1511,9 @@ async function saveExerciseSets(dayType, ex, sets) {
 
 function setUnit(kg) {
   useKg = kg;
+  appStore.settings.useKg = kg;
   localStorage.setItem('useKg', kg);
-  // Re-render gym to update all inputs and hints
+  saveStoreKey('settings', appStore.settings);
   renderGym();
 }
 
@@ -1481,14 +1610,255 @@ function buildHabitCompletionByDate(logs) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function findLatestPhotoDataUrl() {
-  let latestKey = null;
+function getStartPhotoDisplayUrl() {
+  return appStore.photos?.preview?.start || photoPublicUrl(appStore.photos?.start);
+}
+
+function findLatestPhotoDisplayUrl() {
+  const previewWeeks = appStore.photos?.preview?.weeks || {};
+  const previewKeys = Object.keys(previewWeeks).sort();
+  if (previewKeys.length) {
+    return previewWeeks[previewKeys[previewKeys.length - 1]];
+  }
+  const weeks = appStore.photos?.weeks || {};
+  const keys = Object.keys(weeks).sort();
+  return keys.length ? photoPublicUrl(weeks[keys[keys.length - 1]]) : null;
+}
+
+function photoPublicUrl(path) {
+  if (!path) return null;
+  return `${SUPABASE_URL}/storage/v1/object/public/${PHOTO_BUCKET}/${path}`;
+}
+
+async function uploadPhotoFile(path, blob) {
+  const { error } = await db.storage.from(PHOTO_BUCKET).upload(path, blob, {
+    contentType: 'image/jpeg',
+    upsert: true,
+  });
+  if (error) throw error;
+}
+
+function migrateLegacyPhotosToPreview() {
+  const photos = { start: null, weeks: {}, preview: { start: null, weeks: {} }, ...appStore.photos };
+  if (!photos.preview) photos.preview = { start: null, weeks: {} };
+
+  const legacyStart = localStorage.getItem('photo-start');
+  if (legacyStart && !photos.preview.start) photos.preview.start = legacyStart;
+
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (!key?.startsWith('photo-')) continue;
-    if (!latestKey || key > latestKey) latestKey = key;
+    if (!key?.startsWith('photo-week-') && !/^photo-\d{4}-\d{2}-\d{2}$/.test(key || '')) continue;
+    const wk = key.startsWith('photo-week-') ? key.slice(11) : key.slice(6);
+    const data = localStorage.getItem(key);
+    if (data && !photos.preview.weeks[wk]) photos.preview.weeks[wk] = data;
   }
-  return latestKey ? localStorage.getItem(latestKey) : null;
+
+  appStore.photos = photos;
+}
+
+function dataUrlToBlob(dataUrl) {
+  return fetch(dataUrl).then(r => r.blob());
+}
+
+// ─── PROGRESS PHOTOS (PWA camera + Supabase Storage) ────────────────────────
+let cameraStream = null;
+let photoCaptureTarget = null;
+
+function compressImage(dataUrl, maxWidth = 960, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxWidth / img.width);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+async function saveProgressPhoto(target, dataUrl) {
+  let compressed;
+  try {
+    compressed = await compressImage(dataUrl);
+  } catch {
+    compressed = dataUrl;
+  }
+
+  const photos = {
+    start: appStore.photos?.start || null,
+    weeks: { ...(appStore.photos?.weeks || {}) },
+    preview: {
+      start: appStore.photos?.preview?.start || null,
+      weeks: { ...(appStore.photos?.preview?.weeks || {}) },
+    },
+  };
+
+  if (target === 'start') {
+    photos.preview.start = compressed;
+  } else {
+    const wk = getWeekStart(new Date());
+    photos.preview.weeks[wk] = compressed;
+    if (!photos.preview.start) photos.preview.start = compressed;
+  }
+
+  appStore.photos = photos;
+  renderProgressPhotos();
+  closeCameraOverlay();
+
+  try {
+    await saveStoreKey('photos', photos);
+    showToast('Photo saved');
+  } catch {
+    showToast('Photo saved on this device');
+  }
+
+  try {
+    const blob = await dataUrlToBlob(compressed);
+    if (target === 'start') {
+      await uploadPhotoFile('start.jpg', blob);
+      photos.start = 'start.jpg';
+    } else {
+      const wk = getWeekStart(new Date());
+      const path = `week-${wk}.jpg`;
+      await uploadPhotoFile(path, blob);
+      photos.weeks[wk] = path;
+      if (!photos.start) {
+        await uploadPhotoFile('start.jpg', blob);
+        photos.start = 'start.jpg';
+      }
+    }
+    appStore.photos = photos;
+    await saveStoreKey('photos', photos);
+  } catch {
+    // Cloud sync optional — local preview already shown
+  }
+}
+
+function renderPhotoSlot(slotEl, dataUrl, label, emptyHint) {
+  if (!slotEl) return;
+  slotEl.classList.toggle('has-photo', !!dataUrl);
+  if (dataUrl) {
+    slotEl.innerHTML = `
+      <img src="${dataUrl}" alt="${label}">
+      <span class="photo-slot-label">${label}</span>
+      <span class="photo-slot-hint">Tap to retake</span>`;
+  } else {
+    slotEl.innerHTML = `
+      <span class="photo-slot-icon">${label === 'Day 1' ? '📸' : '📷'}</span>
+      <span class="photo-slot-label">${label}</span>
+      <span class="photo-slot-hint">${emptyHint}</span>`;
+  }
+}
+
+function renderProgressPhotos() {
+  renderPhotoSlot(
+    document.getElementById('photo-start'),
+    getStartPhotoDisplayUrl(),
+    'Day 1',
+    'Tap to take photo'
+  );
+  renderPhotoSlot(
+    document.getElementById('photo-latest'),
+    findLatestPhotoDisplayUrl(),
+    'Latest',
+    'Tap to take photo'
+  );
+}
+
+function closeCameraOverlay() {
+  const overlay = document.getElementById('camera-overlay');
+  overlay?.classList.remove('open');
+  overlay?.setAttribute('aria-hidden', 'true');
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(track => track.stop());
+    cameraStream = null;
+  }
+  const video = document.getElementById('camera-preview');
+  if (video) video.srcObject = null;
+}
+
+async function openPhotoCapture(target) {
+  photoCaptureTarget = target;
+  const title = document.getElementById('camera-title');
+  if (title) title.textContent = target === 'start' ? 'Day 1 photo' : 'Latest progress photo';
+
+  if (navigator.mediaDevices?.getUserMedia) {
+    try {
+      closeCameraOverlay();
+      cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+      const video = document.getElementById('camera-preview');
+      video.srcObject = cameraStream;
+      await video.play();
+      const overlay = document.getElementById('camera-overlay');
+      overlay?.classList.add('open');
+      overlay?.setAttribute('aria-hidden', 'false');
+      return;
+    } catch {
+      // Fall back to native camera capture on devices that block inline preview
+    }
+  }
+
+  triggerCameraFallback();
+}
+
+function triggerCameraFallback() {
+  const input = document.getElementById('photo-camera-fallback');
+  if (!input) {
+    showToast('Camera not available on this device');
+    return;
+  }
+  input.value = '';
+  input.click();
+}
+
+function captureFromCameraPreview() {
+  const video = document.getElementById('camera-preview');
+  const canvas = document.getElementById('camera-canvas');
+  if (!video?.videoWidth || !canvas) {
+    showToast('Camera not ready — try again');
+    return;
+  }
+
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+  saveProgressPhoto(photoCaptureTarget, dataUrl);
+}
+
+function setupPhotoCapture() {
+  const row = document.querySelector('.photo-row');
+  row?.addEventListener('click', e => {
+    const slot = e.target.closest('#photo-start, #photo-latest');
+    if (!slot) return;
+    openPhotoCapture(slot.id === 'photo-start' ? 'start' : 'latest');
+  });
+
+  document.getElementById('camera-close')?.addEventListener('click', closeCameraOverlay);
+  document.getElementById('camera-capture')?.addEventListener('click', captureFromCameraPreview);
+
+  document.getElementById('photo-camera-fallback')?.addEventListener('change', e => {
+    const file = e.target.files?.[0];
+    if (!file || !photoCaptureTarget) return;
+    const reader = new FileReader();
+    reader.onload = ev => saveProgressPhoto(photoCaptureTarget, ev.target.result);
+    reader.readAsDataURL(file);
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') closeCameraOverlay();
+  });
 }
 
 async function renderProgress() {
@@ -1666,23 +2036,6 @@ function renderCharts() {
   renderLiftProgressChart();
 }
 
-function renderProgressPhotos() {
-  const startSlot = document.getElementById('photo-start');
-  const latestSlot = document.getElementById('photo-latest');
-  if (!startSlot || !latestSlot) return;
-
-  const startWk = getWeekStart(parseLocalDate(getStartDate()));
-  const startPhoto = localStorage.getItem(`photo-${startWk}`);
-  if (startPhoto) {
-    startSlot.innerHTML = `<img src="${startPhoto}" alt="Day 1 photo"><span class="photo-slot-label">Day 1</span>`;
-  }
-
-  const latestPhoto = findLatestPhotoDataUrl();
-  if (latestPhoto) {
-    latestSlot.innerHTML = `<img src="${latestPhoto}" alt="Latest weekly photo"><span class="photo-slot-label">Latest</span>`;
-  }
-}
-
 function renderLiftProgressChart() {
   const select = document.getElementById('lift-select');
   const summary = document.getElementById('lift-summary');
@@ -1696,7 +2049,7 @@ function renderLiftProgressChart() {
   }
   card.style.display = 'block';
 
-  const saved = localStorage.getItem('liftChartExercise');
+  const saved = appStore.settings.liftChartExercise;
   const current = saved && exercises.includes(saved) ? saved : exercises[0];
 
   select.innerHTML = exercises.map(ex =>
@@ -1726,7 +2079,9 @@ function renderLiftProgressChart() {
 
   draw(current);
   select.onchange = () => {
+    appStore.settings.liftChartExercise = select.value;
     localStorage.setItem('liftChartExercise', select.value);
+    saveStoreKey('settings', appStore.settings);
     draw(select.value);
   };
 }
@@ -1953,6 +2308,16 @@ function renderSettings() {
   renderSettingsAccordion(screen, 'gym',      '🏋️ Gym Plan',       renderGymPanel);
   renderSettingsAccordion(screen, 'shopping', '🛒 Shopping List',  renderShoppingPanel);
   renderSettingsAccordion(screen, 'notifs',   '🔔 Notifications',  renderNotifsPanel);
+
+  const spacer = document.createElement('div');
+  spacer.className = 'screen-bottom-spacer';
+  spacer.setAttribute('aria-hidden', 'true');
+  screen.appendChild(spacer);
+}
+
+function getBlockHabits(blockId) {
+  return habits.filter(h => h.block === blockId)
+    .sort((a, b) => (a.item_order || 0) - (b.item_order || 0));
 }
 
 function renderSettingsAccordion(parent, key, title, renderFn) {
@@ -1967,7 +2332,7 @@ function renderSettingsAccordion(parent, key, title, renderFn) {
   `;
 
   const body = document.createElement('div');
-  body.style.cssText = `margin-top:2px;${settingsOpen[key] ? '' : 'display:none'}`;
+  body.style.cssText = `margin-top:2px;padding-bottom:12px;${settingsOpen[key] ? '' : 'display:none'}`;
   body.id = `acc-body-${key}`;
 
   header.addEventListener('click', () => {
@@ -2004,7 +2369,9 @@ function renderProfilePanel(container) {
   const waterInput = document.getElementById('profile-water');
   if (waterInput) {
     waterInput.addEventListener('change', e => {
+      appStore.settings.waterGoal = parseInt(e.target.value, 10) || 8;
       localStorage.setItem('waterGoal', e.target.value);
+      saveStoreKey('settings', appStore.settings);
       const wc = document.getElementById('water-card');
       if (wc) wc.replaceWith(renderWaterWidget());
       showToast('Water goal updated');
@@ -2018,8 +2385,7 @@ function renderHabitsPanel(container) {
 
   BLOCK_ORDER.forEach(blockId => {
     const meta = BLOCK_META[blockId];
-    const blockHabits = habits.filter(h => h.block === blockId)
-      .sort((a,b) => (a.item_order||0) - (b.item_order||0));
+    const blockHabits = getBlockHabits(blockId);
     const isHidden = hidden.includes(blockId);
 
     const labelRow = document.createElement('div');
@@ -2044,35 +2410,97 @@ function renderHabitsPanel(container) {
         setHiddenBlocks([...h2, blockId]);
       }
       renderToday();
-      renderHabitsPanel(container); // refresh toggles
+      renderHabitsPanel(container);
     });
     container.appendChild(labelRow);
 
     const card = document.createElement('div');
-    card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:4px;';
-    blockHabits.forEach((h, i) => {
-      const row = document.createElement('div');
-      row.className = 'settings-habit-item';
-      row.style.cssText = `border-radius:0;${i < blockHabits.length-1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
-      row.innerHTML = `
-        <div class="settings-habit-label">${h.label}</div>
-        <div class="settings-habit-block" style="margin-right:4px">${h.sub || ''}</div>
-        ${h.status === 'buy' ? '<span class="status-badge badge-buy" style="margin-right:4px">BUY</span>' : ''}
-        ${h.status === 'rx' ? '<span class="status-badge badge-rx" style="margin-right:4px">RX</span>' : ''}
-        <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
-      `;
-      row.addEventListener('click', () => openEditHabit(h));
-      card.appendChild(row);
-    });
+    card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:0;';
+    if (blockHabits.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'settings-habit-empty';
+      empty.textContent = 'No habits in this block yet';
+      card.appendChild(empty);
+    } else {
+      blockHabits.forEach((h, i) => {
+        const row = document.createElement('div');
+        row.className = 'settings-habit-item';
+        row.style.cssText = `border-radius:0;margin-bottom:0;${i < blockHabits.length - 1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
+        row.innerHTML = `
+          <button type="button" class="settings-habit-delete" aria-label="Delete ${h.label}">−</button>
+          <div class="settings-habit-label">${h.label}</div>
+          <div class="settings-habit-block" style="margin-right:4px">${h.sub || ''}</div>
+          ${h.status === 'buy' ? '<span class="status-badge badge-buy" style="margin-right:4px">BUY</span>' : ''}
+          ${h.status === 'rx' ? '<span class="status-badge badge-rx" style="margin-right:4px">RX</span>' : ''}
+          <div class="settings-habit-reorder">
+            <button type="button" class="habit-move-btn" data-dir="-1" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button>
+            <button type="button" class="habit-move-btn" data-dir="1" aria-label="Move down" ${i === blockHabits.length - 1 ? 'disabled' : ''}>↓</button>
+          </div>
+          <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
+        `;
+        row.querySelector('.settings-habit-delete').addEventListener('click', e => {
+          e.stopPropagation();
+          deleteHabit(h, container);
+        });
+        row.querySelectorAll('.habit-move-btn').forEach(btn => {
+          btn.addEventListener('click', e => {
+            e.stopPropagation();
+            moveHabit(h, blockId, +btn.dataset.dir, container);
+          });
+        });
+        row.addEventListener('click', () => openEditHabit(h));
+        card.appendChild(row);
+      });
+    }
     container.appendChild(card);
-  });
 
-  const addBtn = document.createElement('button');
-  addBtn.className = 'add-habit-btn';
-  addBtn.style.cssText = 'margin-top:6px;width:100%;';
-  addBtn.innerHTML = `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="4" x2="10" y2="16"/><line x1="4" y1="10" x2="16" y2="10"/></svg> Add habit`;
-  addBtn.addEventListener('click', () => openEditHabit(null));
-  container.appendChild(addBtn);
+    const addBlockBtn = document.createElement('button');
+    addBlockBtn.type = 'button';
+    addBlockBtn.className = 'add-habit-btn';
+    addBlockBtn.innerHTML = `<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="4" x2="10" y2="16"/><line x1="4" y1="10" x2="16" y2="10"/></svg> Add to ${meta.label}`;
+    addBlockBtn.addEventListener('click', () => openEditHabit(null, blockId));
+    container.appendChild(addBlockBtn);
+  });
+}
+
+async function moveHabit(habit, blockId, dir, habitsPanelContainer) {
+  const blockHabits = getBlockHabits(blockId);
+  const idx = blockHabits.findIndex(h => h.id === habit.id);
+  const swapIdx = idx + dir;
+  if (idx < 0 || swapIdx < 0 || swapIdx >= blockHabits.length) return;
+
+  const other = blockHabits[swapIdx];
+  const orderA = habit.item_order ?? idx + 1;
+  const orderB = other.item_order ?? swapIdx + 1;
+
+  try {
+    await Promise.all([
+      api('habits', 'PATCH', { item_order: orderB }, `?id=eq.${habit.id}`),
+      api('habits', 'PATCH', { item_order: orderA }, `?id=eq.${other.id}`),
+    ]);
+    await loadHabits();
+    renderToday();
+    const panel = habitsPanelContainer || document.getElementById('acc-body-habits');
+    if (panel) renderHabitsPanel(panel);
+  } catch {
+    showToast('Error reordering habit');
+  }
+}
+
+async function deleteHabit(habit, habitsPanelContainer) {
+  if (!confirm(`Delete "${habit.label}"?`)) return;
+  try {
+    await api('habits', 'DELETE', null, `?id=eq.${habit.id}`);
+    await loadHabits();
+    renderToday();
+    const panel = habitsPanelContainer || document.getElementById('acc-body-habits');
+    if (panel) renderHabitsPanel(panel);
+    const shopBody = document.getElementById('acc-body-shopping');
+    if (shopBody) renderShoppingSettings(shopBody);
+    showToast('Habit deleted');
+  } catch {
+    showToast('Error deleting habit');
+  }
 }
 
 function renderGymPanel(container) {
@@ -2125,7 +2553,9 @@ function renderProfileSettings() {
   if (startInput) {
     startInput.value = getStartDate();
     startInput.addEventListener('change', e => {
+      appStore.settings.startDate = e.target.value;
       localStorage.setItem('startDate', e.target.value);
+      saveStoreKey('settings', appStore.settings);
       updateHeaderDay();
       showToast('Start date saved');
     });
@@ -2478,7 +2908,7 @@ function closeShopModal() {
 }
 
 // ─── EDIT HABIT MODAL ──────────────────────────────────────────────────────────
-function openEditHabit(habit) {
+function openEditHabit(habit, defaultBlock = null) {
   const modal = document.getElementById('edit-modal');
   const overlay = document.getElementById('modal-overlay');
   const title = document.getElementById('modal-title');
@@ -2487,7 +2917,7 @@ function openEditHabit(habit) {
 
   document.getElementById('edit-label').value = habit?.label || '';
   document.getElementById('edit-sub').value = habit?.sub || '';
-  document.getElementById('edit-block').value = habit?.block || 'morning';
+  document.getElementById('edit-block').value = habit?.block || defaultBlock || 'morning';
   document.getElementById('edit-freq').value = habit?.frequency || 'daily';
   document.getElementById('edit-status').value = habit?.status || 'have';
   document.getElementById('edit-notes').value = habit?.notes || '';
@@ -2528,14 +2958,8 @@ function openEditHabit(habit) {
   deleteBtn.style.display = habit ? 'block' : 'none';
   if (habit) {
     deleteBtn.onclick = async () => {
-      if (!confirm(`Delete "${habit.label}"?`)) return;
-      await api('habits', 'DELETE', null, `?id=eq.${habit.id}`);
-      await loadHabits();
-      renderToday();
-      const habBody = document.getElementById('acc-body-habits');
-      if (habBody) renderHabitsPanel(habBody);
       closeModal();
-      showToast('Habit deleted');
+      await deleteHabit(habit);
     };
   }
 

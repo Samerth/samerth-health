@@ -28,6 +28,7 @@
 <div class="screen active" id="screen-today">
   <div id="today-blocks"></div>
   <button class="log-btn" id="log-btn">Log Day</button>
+  <div class="screen-bottom-spacer" aria-hidden="true"></div>
 </div>
 
 <!-- ─── GYM SCREEN ─── -->
@@ -35,6 +36,7 @@
   <div id="gym-content"></div>
   <div class="section-title">History</div>
   <div id="gym-history"></div>
+  <div class="screen-bottom-spacer" aria-hidden="true"></div>
 </div>
 
 <!-- ─── PROGRESS SCREEN ─── -->
@@ -86,20 +88,21 @@
   </div>
 
   <div class="section-title">Journey</div>
+  <p class="photo-section-hint">Tap a slot to open your camera and take a progress photo.</p>
   <div class="photo-row">
-    <div class="photo-slot" id="photo-start">
-      <span style="font-size:28px">📸</span>
+    <button type="button" class="photo-slot" id="photo-start" aria-label="Take Day 1 photo">
+      <span class="photo-slot-icon">📸</span>
       <span class="photo-slot-label">Day 1</span>
-    </div>
-    <div class="photo-slot" id="photo-latest">
-      <span style="font-size:28px">📷</span>
+      <span class="photo-slot-hint">Tap to take photo</span>
+    </button>
+    <button type="button" class="photo-slot" id="photo-latest" aria-label="Take latest progress photo">
+      <span class="photo-slot-icon">📷</span>
       <span class="photo-slot-label">Latest</span>
-    </div>
+      <span class="photo-slot-hint">Tap to take photo</span>
+    </button>
   </div>
-  <button class="photo-upload-btn" onclick="document.getElementById('photo-file').click()">
-    + Upload weekly photo
-  </button>
-  <input type="file" id="photo-file" accept="image/*" style="display:none" onchange="handlePhotoUpload(event)">
+  <input type="file" id="photo-camera-fallback" accept="image/*" capture="environment" style="display:none" aria-hidden="true">
+  <div class="screen-bottom-spacer" aria-hidden="true"></div>
 </div>
 
 <!-- ─── SETTINGS SCREEN ─── -->
@@ -223,35 +226,27 @@
 <!-- ─── TOAST ─── -->
 <div class="toast" id="toast"></div>
 
+<!-- ─── IN-APP CAMERA (PWA) ─── -->
+<div class="camera-overlay" id="camera-overlay" aria-hidden="true">
+  <div class="camera-panel">
+    <div class="camera-header">
+      <span id="camera-title">Take photo</span>
+      <button type="button" class="camera-close" id="camera-close" aria-label="Close camera">✕</button>
+    </div>
+    <div class="camera-viewport">
+      <video id="camera-preview" autoplay playsinline muted></video>
+    </div>
+    <div class="camera-actions">
+      <button type="button" class="camera-capture-btn" id="camera-capture" aria-label="Capture photo">
+        <span class="camera-capture-ring"></span>
+      </button>
+    </div>
+  </div>
+  <canvas id="camera-canvas" hidden aria-hidden="true"></canvas>
+</div>
+
 <!-- ─── SUPABASE CDN ─── -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script>
-// Photo upload handler (needs Supabase storage bucket set up)
-async function handlePhotoUpload(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const wk = getWeekStart(new Date());
-    localStorage.setItem(`photo-${wk}`, e.target.result);
-    document.getElementById('photo-latest').innerHTML =
-      `<img src="${e.target.result}" alt="Weekly photo"><span class="photo-slot-label">Latest</span>`;
-    if (typeof renderProgressPhotos === 'function') renderProgressPhotos();
-    showToast('Photo saved locally');
-  };
-  reader.readAsDataURL(file);
-}
-
-function getWeekStart(date) {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - d.getDay());
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-</script>
 <script src="app.js"></script>
 </body>
 </html>
