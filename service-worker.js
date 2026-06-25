@@ -1,5 +1,5 @@
-const CACHE = 'samerth-v19';
-const ASSETS = ['/', '/index.html', '/style.css', '/app.js', '/manifest.json'];
+const CACHE = 'samerth-v20';
+const ASSETS = ['/', '/index.html', '/style.css', '/program-data.js', '/app.js', '/manifest.json'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));

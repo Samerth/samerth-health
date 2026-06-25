@@ -458,6 +458,57 @@ body {
   border-bottom: 1px solid #f0ede9;
 }
 
+.session-note {
+  padding: 10px 16px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #8a6500;
+  background: #fff8e7;
+  border-bottom: 1px solid #f0ede9;
+}
+
+.session-note-subtle {
+  color: var(--muted);
+  background: #faf9f7;
+  font-size: 12px;
+}
+
+.exercise-cue {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+  margin-top: 4px;
+}
+
+.avoid-section {
+  margin: 8px 0 0;
+}
+
+.avoid-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 0 14px 10px;
+  overflow: hidden;
+}
+
+.avoid-row {
+  padding: 11px 16px;
+}
+
+.avoid-name {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.avoid-reason {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
 .exercise-block-wrap {
   border-bottom: 1px solid #f0ede9;
 }
@@ -1133,32 +1184,66 @@ canvas { width: 100%; display: block; }
 
 .settings-habit-delete:active { background: #fde8e8; }
 
-.settings-habit-reorder {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.drag-handle {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: #f5f3f0;
+  color: #999;
+  cursor: grab;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 16px;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.habit-move-btn {
-  width: 26px;
-  height: 22px;
-  border: 1.5px solid var(--border);
-  border-radius: 5px;
-  background: #fff;
+.drag-handle:active { cursor: grabbing; color: var(--text); background: #ebe8e4; }
+
+.sortable-list.is-sorting {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sortable-list .sortable-item.is-dragging {
+  opacity: 0.92;
+  background: #f5f3f0;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  z-index: 2;
+  position: relative;
+}
+
+.sortable-hint {
   font-size: 11px;
-  cursor: pointer;
-  font-family: inherit;
-  color: var(--text);
+  color: var(--muted);
+  padding: 0 4px 10px;
+  line-height: 1.4;
+}
+
+.list-row-delete {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid #e8c4c4;
+  background: #fff5f5;
+  color: #c0392b;
+  font-size: 18px;
   line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
   padding: 0;
   -webkit-tap-highlight-color: transparent;
 }
 
-.habit-move-btn:disabled {
-  opacity: 0.25;
-  cursor: default;
-}
+.list-row-delete:active { background: #fde8e8; }
 
 .settings-habit-empty {
   padding: 12px 16px;
@@ -1245,9 +1330,54 @@ canvas { width: 100%; display: block; }
 
 /* ─── GYM HISTORY ─── */
 .history-item {
-  padding: 11px 16px;
+  padding: 14px 16px;
   border-bottom: 1px solid #f0ede9;
 }
 .history-item:last-child { border-bottom: none; }
-.history-date { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
-.history-detail { font-size: 14px; }
+.history-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.history-date {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.history-type {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+}
+.history-exercises {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.history-exercise-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.history-exercise-name {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+  flex: 1;
+  min-width: 0;
+}
+.history-exercise-sets {
+  font-size: 13px;
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+.history-empty {
+  font-size: 13px;
+  color: var(--muted);
+}

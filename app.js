@@ -34,6 +34,9 @@ function defaultAppSettings() {
     gymConfig: null,
     gymOverrides: {},
     liftChartExercise: null,
+    programVersion: 0,
+    profile: null,
+    program: null,
   };
 }
 
@@ -104,8 +107,10 @@ async function migrateLocalStorageToStore() {
   appStore.settings = settings;
   appStore.water = { ...collectLegacyWater(), ...appStore.water };
 
+  const seeded = applyProgramSeed();
   await saveStoreKey('settings', appStore.settings);
   await saveStoreKey('water', appStore.water);
+  if (seeded) gymConfig = normalizeGymConfig(appStore.settings.gymConfig);
 }
 
 async function initAppStore() {
@@ -138,6 +143,10 @@ async function initAppStore() {
   }
 
   useKg = appStore.settings.useKg !== false;
+  if ((appStore.settings.programVersion || 0) < PROGRAM_VERSION) {
+    applyProgramSeed(true);
+    await saveStoreKey('settings', appStore.settings);
+  }
   gymConfig = loadGymConfig();
 
   const cachedPhotos = readLocalJson('store-photos', null);
@@ -195,42 +204,21 @@ function isWaterCacheStale() {
 }
 
 // ─── GYM PLAN ─────────────────────────────────────────────────────────────────
-const DEFAULT_GYM_TEMPLATES = {
-  a: { name: 'Day A — Lower Posture', exercises: [
-    { name: 'Glute bridges', sets: 3, reps: 12 },
-    { name: 'Banded clamshells', sets: 3, reps: 10 },
-    { name: 'Cable hip abduction', sets: 3, reps: 12 },
-    { name: 'Single leg RDL', sets: 3, reps: 10 },
-    { name: 'Leg press', sets: 3, reps: 12 },
-    { name: 'Seated leg curl', sets: 3, reps: 12 },
-  ]},
-  b: { name: 'Day B — Upper Push', exercises: [
-    { name: 'Incline DB press', sets: 3, reps: 12 },
-    { name: 'Cable fly', sets: 3, reps: 12 },
-    { name: 'DB shoulder press', sets: 3, reps: 12 },
-    { name: 'Lateral raises', sets: 3, reps: 15 },
-    { name: 'Tricep pushdown', sets: 3, reps: 12 },
-    { name: 'Wall angels', sets: 3, reps: 10 },
-  ]},
-  c: { name: 'Day C — Lower Strength', exercises: [
-    { name: 'Goblet squat', sets: 3, reps: 12 },
-    { name: 'Walking lunges', sets: 3, reps: 10 },
-    { name: 'Hip thrust', sets: 3, reps: 12 },
-    { name: 'Leg extension', sets: 3, reps: 15 },
-    { name: 'Calf raise', sets: 3, reps: 15 },
-    { name: 'Dead bug', sets: 3, reps: 10 },
-  ]},
-  d: { name: 'Day D — Upper Pull', exercises: [
-    { name: 'Cable row', sets: 3, reps: 12 },
-    { name: 'Lat pulldown', sets: 3, reps: 12 },
-    { name: 'Single arm row', sets: 3, reps: 12 },
-    { name: 'Face pulls', sets: 3, reps: 15 },
-    { name: 'Bicep curl', sets: 3, reps: 12 },
-    { name: 'Rear delt fly', sets: 3, reps: 12 },
-  ]},
-};
+const DEFAULT_GYM_CONFIG = buildGymConfigFromProgram(SAMERTH_PROGRAM);
 
-const DEFAULT_GYM_SCHEDULE = { 1: 'a', 2: 'b', 4: 'c', 5: 'd' }; // Mon, Tue, Thu, Fri
+function normalizeExercise(ex, fallbackEx) {
+  const fb = fallbackEx || {};
+  return {
+    name: (ex?.name || ex?.label || fb.name || '').trim(),
+    sets: Number(ex?.sets) > 0 ? Number(ex.sets) : (fb.sets || 3),
+    reps: ex?.reps != null && ex.reps !== '' ? Number(ex.reps) : (ex?.reps === null ? null : fb.reps ?? null),
+    note: ex?.note || fb.note || undefined,
+    cue: ex?.cue || fb.cue || undefined,
+    side: ex?.side || fb.side || undefined,
+    duration_seconds: ex?.duration_seconds || fb.duration_seconds || undefined,
+    logType: ex?.logType || fb.logType || (ex?.weight_kg === 0 || ex?.duration_seconds ? 'check' : 'weight'),
+  };
+}
 
 function normalizeGymTemplate(tpl, fallback) {
   if (Array.isArray(tpl)) {
@@ -240,26 +228,44 @@ function normalizeGymTemplate(tpl, fallback) {
     return fallback ? JSON.parse(JSON.stringify(fallback)) : { name: 'Workout', exercises: [] };
   }
   const rawList = tpl.exercises ?? tpl.items ?? tpl.workouts;
+  const fbList = fallback?.exercises || [];
   const exercises = (Array.isArray(rawList) ? rawList : [])
-    .map(ex => ({
-      name: (ex?.name || ex?.label || '').trim(),
-      sets: Number(ex?.sets) > 0 ? Number(ex.sets) : 3,
-      reps: ex?.reps != null && ex.reps !== '' ? Number(ex.reps) : 12,
-      note: ex?.note || undefined,
-    }))
+    .map((ex, i) => normalizeExercise(ex, fbList[i]))
     .filter(ex => ex.name);
   const out = {
     name: tpl.name || tpl.title || fallback?.name || 'Workout',
-    exercises: exercises.length ? exercises : JSON.parse(JSON.stringify(fallback?.exercises || [])),
+    sessionType: tpl.sessionType || fallback?.sessionType || 'main',
+    sessionNote: tpl.sessionNote || fallback?.sessionNote || undefined,
+    includeWarmup: tpl.includeWarmup ?? fallback?.includeWarmup ?? (tpl.sessionType || fallback?.sessionType || 'main') === 'main',
+    exercises: exercises.length ? exercises : JSON.parse(JSON.stringify(fbList)),
   };
   return out;
 }
 
+function normalizeWarmupPhases(raw) {
+  const defaults = DEFAULT_GYM_CONFIG.warmup;
+  if (raw?.phases?.length) {
+    return {
+      note: raw.note || defaults.note,
+      phases: raw.phases.map((phase, pi) => ({
+        name: phase.name || defaults.phases?.[pi]?.name || 'Warmup',
+        exercises: (phase.exercises || []).map((ex, i) =>
+          normalizeExercise(ex, defaults.phases?.[pi]?.exercises?.[i])
+        ).filter(ex => ex.name),
+      })).filter(p => p.exercises.length),
+    };
+  }
+  if (Array.isArray(raw) && raw.length) {
+    return {
+      note: defaults.note,
+      phases: [{ name: 'Warmup', exercises: raw.map((ex, i) => normalizeExercise(ex, defaults.phases?.[0]?.exercises?.[i])).filter(ex => ex.name) }],
+    };
+  }
+  return JSON.parse(JSON.stringify(defaults));
+}
+
 function normalizeGymConfig(raw) {
-  const defaults = {
-    templates: JSON.parse(JSON.stringify(DEFAULT_GYM_TEMPLATES)),
-    schedule: { ...DEFAULT_GYM_SCHEDULE },
-  };
+  const defaults = JSON.parse(JSON.stringify(DEFAULT_GYM_CONFIG));
   const src = raw?.templates && raw?.schedule ? raw : defaults;
   const templates = {};
   const ids = new Set([...Object.keys(defaults.templates), ...Object.keys(src.templates || {})]);
@@ -271,7 +277,31 @@ function normalizeGymConfig(raw) {
     if (!templates[schedule[dow]]) delete schedule[dow];
   });
   if (!Object.keys(schedule).length) Object.assign(schedule, defaults.schedule);
-  return { templates, schedule };
+  const warmup = normalizeWarmupPhases(src.warmup ?? raw?.warmup);
+  return { templates, schedule, warmup };
+}
+
+function applyProgramSeed(force = false) {
+  if (!force && (appStore.settings.programVersion || 0) >= PROGRAM_VERSION) return false;
+  appStore.settings.programVersion = PROGRAM_VERSION;
+  appStore.settings.program = getProgramMeta(SAMERTH_PROGRAM);
+  appStore.settings.profile = { ...SAMERTH_PROGRAM.user };
+  appStore.settings.gymConfig = buildGymConfigFromProgram(SAMERTH_PROGRAM);
+  localStorage.setItem('gymConfig', JSON.stringify(appStore.settings.gymConfig));
+  return true;
+}
+
+async function seedProgramHabitsIfEmpty() {
+  if (habits.length > 0) return;
+  const seed = buildProgramHabits(SAMERTH_PROGRAM);
+  for (const h of seed) {
+    try {
+      await api('habits', 'POST', h);
+    } catch (e) {
+      console.error('seed habit', h.label, e);
+    }
+  }
+  await loadHabits();
 }
 
 function loadGymConfig() {
@@ -334,7 +364,7 @@ function getScheduledTemplateId() {
 
 function getTemplateById(id) {
   if (!id || !gymConfig.templates[id]) return null;
-  return normalizeGymTemplate(gymConfig.templates[id], DEFAULT_GYM_TEMPLATES[id]);
+  return normalizeGymTemplate(gymConfig.templates[id], DEFAULT_GYM_CONFIG.templates[id]);
 }
 
 function getScheduledGym() {
@@ -374,38 +404,66 @@ function setTemplateDay(templateId, dow) {
 
 const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
-// Warmup exercises — shown first; skips any already in today's main workout
-const PHYSIO_EXERCISES = [
-  { name: 'Hip CARs',                sets: 3, reps: 10, note: 'each side' },
-  { name: '90/90 hip stretch',       sets: 2, reps: null, note: '2 min each' },
-  { name: 'Standing hip abduction',  sets: 3, reps: 10  },
-  { name: 'Cervical retraction',     sets: 3, reps: 10  },
-  { name: 'Right QL stretch',        sets: 3, reps: null, note: '60 sec' },
-  { name: 'Pelvic floor / kegels',   sets: 3, reps: 10  },
-];
+function getWarmupExercises() {
+  const w = gymConfig.warmup;
+  if (w?.phases?.length) {
+    const out = [];
+    w.phases.forEach(phase => {
+      (phase.exercises || []).forEach(ex => {
+        out.push({ ...ex, phaseName: phase.name });
+      });
+    });
+    return out;
+  }
+  if (Array.isArray(w)) return w;
+  return DEFAULT_GYM_CONFIG.warmup?.phases?.flatMap(p => p.exercises.map(ex => ({ ...ex, phaseName: p.name }))) || [];
+}
 
 function getOrderedWorkout(gymDay) {
   const list = Array.isArray(gymDay?.exercises) ? gymDay.exercises : [];
   const mainNames = new Set(list.map(e => e.name.toLowerCase()));
+  const sessionType = gymDay?.sessionType || 'main';
+  const includeWarmup = gymDay?.includeWarmup !== false && sessionType === 'main';
   const flow = [];
   let step = 1;
 
-  PHYSIO_EXERCISES.forEach(ex => {
-    if (!mainNames.has(ex.name.toLowerCase())) {
-      flow.push({ ...ex, phase: 'warmup', step: step++ });
-    }
-  });
+  if (includeWarmup) {
+    getWarmupExercises().forEach(ex => {
+      if (!mainNames.has(ex.name.toLowerCase())) {
+        flow.push({ ...ex, phase: 'warmup', step: step++ });
+      }
+    });
+  }
 
   list.forEach(ex => {
-    flow.push({ ...ex, phase: 'lift', step: step++ });
+    const logType = ex.logType || (sessionType === 'main' ? 'weight' : 'check');
+    flow.push({
+      ...ex,
+      phase: logType === 'weight' ? 'lift' : 'check',
+      logType,
+      step: step++,
+    });
   });
 
   return flow;
 }
 
 function formatExerciseSets(ex) {
-  if (ex.note && !ex.reps) return `${ex.sets} sets · ${ex.note}`;
+  if (ex.reps == null && ex.note) return `${ex.sets} sets · ${ex.note}`;
+  if (ex.reps == null) return `${ex.sets} sets`;
   return `${ex.sets}×${ex.reps}${ex.note ? ' · ' + ex.note : ''}`;
+}
+
+function exerciseCueHtml(ex) {
+  return ex.cue ? `<div class="exercise-cue">${ex.cue}</div>` : '';
+}
+
+function getProgramProfile() {
+  return appStore.settings.profile || SAMERTH_PROGRAM.user;
+}
+
+function getProgramReference() {
+  return appStore.settings.program || getProgramMeta(SAMERTH_PROGRAM);
 }
 
 const BLOCK_META = {
@@ -714,6 +772,7 @@ async function init() {
   setupDayRollover();
   if (isWaterCacheStale()) resetWaterForNewDay(today());
   await loadHabits();
+  await seedProgramHabitsIfEmpty();
   await loadTodayLogs({ freshDay: isNewCalendarDay() });
   renderToday();
   setupNav();
@@ -983,7 +1042,7 @@ function renderToday() {
     buyCard.innerHTML = `
       <div style="padding:11px 14px 6px;display:flex;align-items:center;justify-content:space-between;">
         <span style="font-family:Georgia,serif;font-size:13px;color:#b87000;">🛒 Need to buy (${buyItems.length})</span>
-        <button onclick="document.querySelector('[data-screen=settings]').click();setTimeout(()=>document.getElementById('shopping-settings').scrollIntoView({behavior:'smooth'}),300)" style="background:none;border:none;font-size:11px;color:var(--muted);cursor:pointer;font-family:inherit;">Manage →</button>
+        <button type="button" onclick="navigateToShoppingSettings()" style="background:none;border:none;font-size:11px;color:var(--muted);cursor:pointer;font-family:inherit;">Manage →</button>
       </div>
       <div style="padding:0 14px 12px;display:flex;flex-wrap:wrap;gap:6px;">
         ${buyItems.map(h => `<span style="background:#fff3cd;color:#856404;border:1px solid #f5d87a;border-radius:20px;padding:4px 11px;font-size:13px;">${h.label}</span>`).join('')}
@@ -1280,6 +1339,9 @@ async function renderGym() {
   }
 
   await renderGymHistory();
+
+  const avoidEl = renderAvoidList();
+  if (avoidEl) historyContainer.parentElement.insertBefore(avoidEl, historyContainer);
 }
 
 function renderWorkoutPicker(activeId) {
@@ -1330,7 +1392,8 @@ function getNextGymDay() {
 }
 
 async function renderWorkout(gymDay, container) {
-  // Load today's saved weights + full history for progressive overload
+  const sessionType = gymDay.sessionType || 'main';
+  const hasWeightExercises = getOrderedWorkout(gymDay).some(ex => ex.phase === 'lift');
   let saved = [], allLogs = [];
   try {
     [saved, allLogs] = await Promise.all([
@@ -1347,18 +1410,38 @@ async function renderWorkout(gymDay, container) {
   const savedByExercise = {};
   saved.forEach(s => { savedByExercise[s.exercise] = normalizeSetsData(s); });
 
+  const unitToggle = hasWeightExercises ? `
+    <div style="display:flex;gap:0;border:1.5px solid var(--border);border-radius:8px;overflow:hidden;">
+      <button id="unit-kg" onclick="setUnit(true)" style="padding:5px 12px;border:none;font-size:12px;cursor:pointer;font-family:inherit;background:${useKg ? 'var(--header)' : '#fff'};color:${useKg ? '#fff' : 'var(--muted)'};">kg</button>
+      <button id="unit-lbs" onclick="setUnit(false)" style="padding:5px 12px;border:none;font-size:12px;cursor:pointer;font-family:inherit;background:${!useKg ? 'var(--header)' : '#fff'};color:${!useKg ? '#fff' : 'var(--muted)'};">lbs</button>
+    </div>` : '';
+
   container.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px 4px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px 4px;gap:12px;">
       <div class="workout-title" style="padding:0;">${gymDay.name}</div>
-      <div style="display:flex;gap:0;border:1.5px solid var(--border);border-radius:8px;overflow:hidden;">
-        <button id="unit-kg" onclick="setUnit(true)" style="padding:5px 12px;border:none;font-size:12px;cursor:pointer;font-family:inherit;background:${useKg ? 'var(--header)' : '#fff'};color:${useKg ? '#fff' : 'var(--muted)'};">kg</button>
-        <button id="unit-lbs" onclick="setUnit(false)" style="padding:5px 12px;border:none;font-size:12px;cursor:pointer;font-family:inherit;background:${!useKg ? 'var(--header)' : '#fff'};color:${!useKg ? '#fff' : 'var(--muted)'};">lbs</button>
-      </div>
+      ${unitToggle}
     </div>`;
+
   const card = document.createElement('div');
   card.className = 'card';
+
+  if (gymDay.sessionNote) {
+    const note = document.createElement('div');
+    note.className = 'session-note';
+    note.textContent = gymDay.sessionNote;
+    card.appendChild(note);
+  }
+
+  if (gymConfig.warmup?.note && gymDay.includeWarmup !== false && sessionType === 'main') {
+    const warmupNote = document.createElement('div');
+    warmupNote.className = 'session-note session-note-subtle';
+    warmupNote.textContent = gymConfig.warmup.note;
+    card.appendChild(warmupNote);
+  }
+
   const flow = getOrderedWorkout(gymDay);
   let lastPhase = null;
+  let lastPhaseName = null;
 
   if (!flow.length) {
     card.innerHTML = '<div class="empty" style="padding:20px;">No exercises in this workout — open Settings → Gym Plan to restore defaults</div>';
@@ -1366,116 +1449,159 @@ async function renderWorkout(gymDay, container) {
     return;
   }
 
+  function renderCheckExercise(ex, key) {
+    const item = document.createElement('div');
+    item.className = 'exercise-item';
+    if (!gymState[key]) gymState[key] = { done: false };
+    item.innerHTML = `
+      <div class="exercise-step">${ex.step}</div>
+      <div class="exercise-done ${gymState[key].done ? 'done' : ''}">${checkSVG()}</div>
+      <div class="exercise-info">
+        <div class="exercise-name">${ex.name}</div>
+        <div class="exercise-sets">${formatExerciseSets(ex)}</div>
+        ${exerciseCueHtml(ex)}
+      </div>`;
+    item.querySelector('.exercise-done').addEventListener('click', function() {
+      gymState[key].done = !gymState[key].done;
+      this.classList.toggle('done', gymState[key].done);
+    });
+    return item;
+  }
+
   flow.forEach(ex => {
-    if (ex.phase !== lastPhase) {
+    const phaseLabel = ex.phase === 'warmup'
+      ? (ex.phaseName || 'Corrective warmup')
+      : ex.phase === 'lift'
+        ? 'Main workout'
+        : sessionType === 'corrective'
+          ? 'Corrective routine'
+          : sessionType === 'cardio'
+            ? 'Cardio'
+            : 'Exercises';
+
+    if (ex.phase !== lastPhase || (ex.phase === 'warmup' && ex.phaseName !== lastPhaseName)) {
+      if (ex.phase === 'warmup') lastPhaseName = ex.phaseName;
+      else lastPhaseName = null;
       lastPhase = ex.phase;
       const divider = document.createElement('div');
       divider.className = 'exercise-phase-label';
-      divider.textContent = ex.phase === 'warmup' ? 'Warmup' : 'Main workout';
+      divider.textContent = phaseLabel;
       card.appendChild(divider);
     }
 
     const key = ex.phase === 'warmup' ? `physio-${ex.name}` : ex.name;
-    const item = document.createElement('div');
-    item.className = 'exercise-item';
 
-    if (ex.phase === 'warmup') {
-      if (!gymState[key]) gymState[key] = { done: false };
-      item.innerHTML = `
-        <div class="exercise-step">${ex.step}</div>
-        <div class="exercise-done ${gymState[key].done ? 'done' : ''}">${checkSVG()}</div>
-        <div class="exercise-info">
-          <div class="exercise-name">${ex.name}</div>
-          <div class="exercise-sets">${formatExerciseSets(ex)}</div>
-        </div>`;
-      item.querySelector('.exercise-done').addEventListener('click', function() {
-        gymState[key].done = !gymState[key].done;
-        this.classList.toggle('done', gymState[key].done);
-      });
-    } else {
-      const lastSets = getLastSessionSets(allLogs, key);
-      const savedSets = savedByExercise[key] || loadLocalSets(today(), key);
-      const state = ensureExerciseSets(key, ex, savedSets, lastSets);
-      const stats = getExerciseStats(allLogs, key);
-
-      const block = document.createElement('div');
-      block.className = 'exercise-block';
-
-      const header = document.createElement('div');
-      header.className = 'exercise-block-header';
-      const bestHint = stats.prBeforeToday != null
-        ? `<span class="exercise-hint">best ${toDisplay(stats.prBeforeToday)}${unitLabel()}</span>` : '';
-      header.innerHTML = `
-        <div class="exercise-step">${ex.step}</div>
-        <div class="exercise-info">
-          <div class="exercise-name">${ex.name}</div>
-          <div class="exercise-sets">target ${formatExerciseSets(ex)} ${bestHint}</div>
-        </div>`;
-      block.appendChild(header);
-
-      const setList = document.createElement('div');
-      setList.className = 'set-list';
-
-      function renderSetRows() {
-        setList.innerHTML = '';
-        state.sets.forEach((set, si) => {
-          const lastSet = lastSets?.[si];
-          const status = getSetOverloadStatus(set, lastSet);
-          const row = document.createElement('div');
-          row.className = 'set-row';
-          row.innerHTML = `
-            <span class="set-num">${si + 1}</span>
-            <input type="number" class="set-weight" placeholder="${unitLabel()}" value="${set.weight_kg ? toDisplay(set.weight_kg) : ''}" min="0" step="0.5">
-            <span class="set-x">×</span>
-            <input type="number" class="set-reps" placeholder="reps" value="${set.reps ?? ''}" min="0" step="1">
-            <span class="set-hint">${formatSetHint(lastSet)}</span>
-            <span class="overload-badge ${status?.cls || ''}">${status?.text || ''}</span>`;
-
-          const wInput = row.querySelector('.set-weight');
-          const rInput = row.querySelector('.set-reps');
-          const badge = row.querySelector('.overload-badge');
-
-          function syncSet() {
-            set.weight_kg = toKg(wInput.value);
-            set.reps = rInput.value ? +rInput.value : null;
-            const st = getSetOverloadStatus(set, lastSet);
-            badge.textContent = st?.text || '';
-            badge.className = `overload-badge ${st?.cls || ''}`;
-            saveLocalSets(today(), key, state.sets);
-            scheduleSaveSets(gymDay.name, ex, state.sets);
-          }
-
-          wInput.addEventListener('input', syncSet);
-          rInput.addEventListener('input', syncSet);
-          setList.appendChild(row);
-        });
-      }
-
-      renderSetRows();
-
-      const addBtn = document.createElement('button');
-      addBtn.type = 'button';
-      addBtn.className = 'add-set-btn';
-      addBtn.textContent = '+ add set';
-      addBtn.addEventListener('click', () => {
-        const prev = state.sets[state.sets.length - 1];
-        state.sets.push({
-          weight_kg: prev?.weight_kg ?? null,
-          reps: prev?.reps ?? ex.reps ?? null,
-        });
-        renderSetRows();
-      });
-
-      block.appendChild(setList);
-      block.appendChild(addBtn);
-      item.appendChild(block);
-      item.className = 'exercise-block-wrap';
+    if (ex.phase === 'warmup' || ex.phase === 'check') {
+      card.appendChild(renderCheckExercise(ex, key));
+      return;
     }
 
+    const lastSets = getLastSessionSets(allLogs, key);
+    const savedSets = savedByExercise[key] || loadLocalSets(today(), key);
+    const state = ensureExerciseSets(key, ex, savedSets, lastSets);
+    const stats = getExerciseStats(allLogs, key);
+
+    const item = document.createElement('div');
+    item.className = 'exercise-block-wrap';
+    const block = document.createElement('div');
+    block.className = 'exercise-block';
+
+    const header = document.createElement('div');
+    header.className = 'exercise-block-header';
+    const bestHint = stats.prBeforeToday != null
+      ? `<span class="exercise-hint">best ${toDisplay(stats.prBeforeToday)}${unitLabel()}</span>` : '';
+    header.innerHTML = `
+      <div class="exercise-step">${ex.step}</div>
+      <div class="exercise-info">
+        <div class="exercise-name">${ex.name}</div>
+        <div class="exercise-sets">target ${formatExerciseSets(ex)} ${bestHint}</div>
+        ${exerciseCueHtml(ex)}
+      </div>`;
+    block.appendChild(header);
+
+    const setList = document.createElement('div');
+    setList.className = 'set-list';
+
+    function renderSetRows() {
+      setList.innerHTML = '';
+      state.sets.forEach((set, si) => {
+        const lastSet = lastSets?.[si];
+        const status = getSetOverloadStatus(set, lastSet);
+        const row = document.createElement('div');
+        row.className = 'set-row';
+        row.innerHTML = `
+          <span class="set-num">${si + 1}</span>
+          <input type="number" class="set-weight" placeholder="${unitLabel()}" value="${set.weight_kg ? toDisplay(set.weight_kg) : ''}" min="0" step="0.5">
+          <span class="set-x">×</span>
+          <input type="number" class="set-reps" placeholder="reps" value="${set.reps ?? ''}" min="0" step="1">
+          <span class="set-hint">${formatSetHint(lastSet)}</span>
+          <span class="overload-badge ${status?.cls || ''}">${status?.text || ''}</span>`;
+
+        const wInput = row.querySelector('.set-weight');
+        const rInput = row.querySelector('.set-reps');
+        const badge = row.querySelector('.overload-badge');
+
+        function syncSet() {
+          set.weight_kg = toKg(wInput.value);
+          set.reps = rInput.value ? +rInput.value : null;
+          const st = getSetOverloadStatus(set, lastSet);
+          badge.textContent = st?.text || '';
+          badge.className = `overload-badge ${st?.cls || ''}`;
+          saveLocalSets(today(), key, state.sets);
+          scheduleSaveSets(gymDay.name, ex, state.sets);
+        }
+
+        wInput.addEventListener('input', syncSet);
+        rInput.addEventListener('input', syncSet);
+        setList.appendChild(row);
+      });
+    }
+
+    renderSetRows();
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'add-set-btn';
+    addBtn.textContent = '+ add set';
+    addBtn.addEventListener('click', () => {
+      const prev = state.sets[state.sets.length - 1];
+      state.sets.push({
+        weight_kg: prev?.weight_kg ?? null,
+        reps: prev?.reps ?? ex.reps ?? null,
+      });
+      renderSetRows();
+    });
+
+    block.appendChild(setList);
+    block.appendChild(addBtn);
+    item.appendChild(block);
     card.appendChild(item);
   });
 
   container.appendChild(card);
+}
+
+function renderAvoidList() {
+  const avoid = getProgramReference().exercises_to_avoid || [];
+  if (!avoid.length) return null;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'avoid-section';
+  wrap.innerHTML = '<div class="section-title">Avoid for now</div>';
+
+  const card = document.createElement('div');
+  card.className = 'card avoid-card';
+  avoid.forEach((item, i) => {
+    const row = document.createElement('div');
+    row.className = 'avoid-row';
+    if (i < avoid.length - 1) row.style.borderBottom = '1px solid #f0ede9';
+    row.innerHTML = `
+      <div class="avoid-name">${item.name}</div>
+      <div class="avoid-reason">${item.reason}</div>`;
+    card.appendChild(row);
+  });
+  wrap.appendChild(card);
+  return wrap;
 }
 
 async function saveExerciseSets(dayType, ex, sets) {
@@ -1517,6 +1643,11 @@ function setUnit(kg) {
   renderGym();
 }
 
+function formatHistoryDate(dateStr) {
+  const d = new Date(`${dateStr}T12:00:00`);
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
 async function renderGymHistory() {
   const container = document.getElementById('gym-history');
   const logs = await api('gym_logs', 'GET', null,
@@ -1547,29 +1678,54 @@ async function renderGymHistory() {
 
   const card = document.createElement('div');
   card.className = 'card';
-  Object.values(grouped).forEach(g => {
-    const item = document.createElement('div');
-    item.className = 'history-item';
-    const exList = g.exercises
-      .map(e => {
-        const sets = normalizeSetsData(e);
-        const summary = formatSetsSummary(sets);
-        if (!summary) return null;
-        const max = getLogMaxWeight(e);
-        if (e._prev != null && max) {
-          const diff = max - e._prev;
-          if (diff > 0) return `${e.exercise}: ${summary} <span class="overload-up-inline">↑</span>`;
-          if (diff < 0) return `${e.exercise}: ${summary} <span class="overload-down-inline">↓</span>`;
-        }
-        return `${e.exercise}: ${summary}`;
-      })
-      .filter(Boolean)
-      .join(' · ');
-    item.innerHTML = `
-      <div class="history-date">${g.date} — ${g.type}</div>
-      <div class="history-detail">${exList || 'No weights logged'}</div>`;
-    card.appendChild(item);
-  });
+  Object.values(grouped)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .forEach(g => {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+
+      const header = document.createElement('div');
+      header.className = 'history-header';
+      header.innerHTML = `
+        <div class="history-date">${formatHistoryDate(g.date)}</div>
+        <div class="history-type">${getTemplateShortName(g.type)}</div>`;
+      item.appendChild(header);
+
+      const list = document.createElement('div');
+      list.className = 'history-exercises';
+
+      const rows = g.exercises
+        .map(e => {
+          const sets = normalizeSetsData(e);
+          const summary = formatSetsSummary(sets);
+          if (!summary) return null;
+          const max = getLogMaxWeight(e);
+          let trend = '';
+          if (e._prev != null && max) {
+            const diff = max - e._prev;
+            if (diff > 0) trend = '<span class="overload-up-inline" aria-label="weight up">↑</span>';
+            else if (diff < 0) trend = '<span class="overload-down-inline" aria-label="weight down">↓</span>';
+          }
+          return { name: e.exercise, summary, trend };
+        })
+        .filter(Boolean);
+
+      if (!rows.length) {
+        list.innerHTML = '<div class="history-empty">No weights logged</div>';
+      } else {
+        rows.forEach(row => {
+          const rowEl = document.createElement('div');
+          rowEl.className = 'history-exercise-row';
+          rowEl.innerHTML = `
+            <div class="history-exercise-name">${row.name}${row.trend}</div>
+            <div class="history-exercise-sets">${row.summary}</div>`;
+          list.appendChild(rowEl);
+        });
+      }
+
+      item.appendChild(list);
+      card.appendChild(item);
+    });
   container.appendChild(card);
 }
 
@@ -2297,7 +2453,7 @@ function renderWelcomeBack() {
 
 // ─── SETTINGS SCREEN ──────────────────────────────────────────────────────────
 // Track which accordion sections are open (default: all closed)
-const settingsOpen = { profile: false, habits: false, gym: false, shopping: false, notifs: false };
+const settingsOpen = { profile: false, habits: false, gym: false, program: false, shopping: false, notifs: false };
 
 function renderSettings() {
   const screen = document.getElementById('screen-settings');
@@ -2306,6 +2462,7 @@ function renderSettings() {
   renderSettingsAccordion(screen, 'profile',  '👤 Profile',        renderProfilePanel);
   renderSettingsAccordion(screen, 'habits',   '📋 Habits',         renderHabitsPanel);
   renderSettingsAccordion(screen, 'gym',      '🏋️ Gym Plan',       renderGymPanel);
+  renderSettingsAccordion(screen, 'program',  '📘 Program Guide',  renderProgramPanel);
   renderSettingsAccordion(screen, 'shopping', '🛒 Shopping List',  renderShoppingPanel);
   renderSettingsAccordion(screen, 'notifs',   '🔔 Notifications',  renderNotifsPanel);
 
@@ -2318,6 +2475,123 @@ function renderSettings() {
 function getBlockHabits(blockId) {
   return habits.filter(h => h.block === blockId)
     .sort((a, b) => (a.item_order || 0) - (b.item_order || 0));
+}
+
+function getShopItems() {
+  return getBlockHabits('shopping');
+}
+
+function attachSortableList(listEl, onSorted) {
+  if (!listEl) return;
+
+  let dragging = null;
+  let activeHandle = null;
+  let fromIndex = -1;
+
+  const getItems = () => [...listEl.querySelectorAll('.sortable-item')];
+
+  listEl.addEventListener('pointerdown', e => {
+    const handle = e.target.closest('.drag-handle');
+    if (!handle || !listEl.contains(handle)) return;
+    dragging = handle.closest('.sortable-item');
+    if (!dragging) return;
+    activeHandle = handle;
+    fromIndex = getItems().indexOf(dragging);
+    dragging.classList.add('is-dragging');
+    listEl.classList.add('is-sorting');
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  listEl.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    e.preventDefault();
+    const y = e.clientY;
+    const items = getItems().filter(el => el !== dragging);
+    let moved = false;
+    for (const item of items) {
+      const rect = item.getBoundingClientRect();
+      if (y < rect.top + rect.height / 2) {
+        listEl.insertBefore(dragging, item);
+        moved = true;
+        break;
+      }
+    }
+    if (!moved) listEl.appendChild(dragging);
+  });
+
+  const finish = async e => {
+    if (!dragging) return;
+    dragging.classList.remove('is-dragging');
+    listEl.classList.remove('is-sorting');
+    if (activeHandle) {
+      try { activeHandle.releasePointerCapture(e.pointerId); } catch {}
+    }
+    activeHandle = null;
+    const ids = getItems().map(el => el.dataset.id);
+    const toIndex = getItems().indexOf(dragging);
+    const item = dragging;
+    dragging = null;
+    if (toIndex !== fromIndex) await onSorted(ids);
+    else item?.classList.remove('is-dragging');
+  };
+
+  listEl.addEventListener('pointerup', finish);
+  listEl.addEventListener('pointercancel', finish);
+}
+
+async function reorderHabitsByIds(orderedIds, habitsPanelContainer) {
+  try {
+    await Promise.all(
+      orderedIds.map((id, i) => api('habits', 'PATCH', { item_order: i + 1 }, `?id=eq.${id}`))
+    );
+    orderedIds.forEach((id, i) => {
+      const h = habits.find(x => x.id === id);
+      if (h) h.item_order = i + 1;
+    });
+    renderToday();
+    showToast('Order updated');
+  } catch {
+    showToast('Error reordering');
+    if (habitsPanelContainer === false) {
+      renderShoppingSettings(document.getElementById('acc-body-shopping'));
+    } else {
+      const panel = habitsPanelContainer || document.getElementById('acc-body-habits');
+      if (panel) renderHabitsPanel(panel);
+    }
+  }
+}
+
+function buildHabitSettingsRow(h, { showSub = true } = {}) {
+  return `
+    <button type="button" class="drag-handle" aria-label="Drag to reorder">⠿</button>
+    <button type="button" class="settings-habit-delete list-row-delete" aria-label="Delete ${h.label}">−</button>
+    <div class="settings-habit-label">${h.label}</div>
+    ${showSub ? `<div class="settings-habit-block" style="margin-right:4px">${h.sub || ''}</div>` : ''}
+    ${h.status === 'buy' ? '<span class="status-badge badge-buy" style="margin-right:4px">BUY</span>' : ''}
+    ${h.status === 'rx' ? '<span class="status-badge badge-rx" style="margin-right:4px">RX</span>' : ''}
+    <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
+  `;
+}
+
+function wireHabitSettingsRow(row, h, container, { onEdit = () => openEditHabit(h) } = {}) {
+  row.querySelector('.settings-habit-delete')?.addEventListener('click', e => {
+    e.stopPropagation();
+    deleteHabit(h, container);
+  });
+  row.addEventListener('click', e => {
+    if (e.target.closest('.drag-handle, .settings-habit-delete')) return;
+    onEdit();
+  });
+}
+
+function navigateToShoppingSettings() {
+  document.querySelector('[data-screen=settings]')?.click();
+  settingsOpen.shopping = true;
+  renderSettings();
+  setTimeout(() => {
+    document.getElementById('acc-body-shopping')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 200);
 }
 
 function renderSettingsAccordion(parent, key, title, renderFn) {
@@ -2350,7 +2624,17 @@ function renderSettingsAccordion(parent, key, title, renderFn) {
 }
 
 function renderProfilePanel(container) {
+  const profile = getProgramProfile();
   container.innerHTML = `
+    <div style="background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:10px;padding:14px 16px;">
+      <div style="font-size:16px;font-weight:600;">${profile.name || 'Sam'}</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:4px;line-height:1.45;">${profile.goal || ''}</div>
+      <div style="display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--muted);">
+        <span>Age ${profile.age || '—'}</span>
+        <span>${profile.height_cm || '—'} cm</span>
+        <span>Start ${profile.weight_kg || '—'} kg</span>
+      </div>
+    </div>
     <div style="background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">
       <div class="profile-row" style="padding:10px 16px;">
         <label style="font-size:14px;color:var(--muted);">Start date</label>
@@ -2379,9 +2663,82 @@ function renderProfilePanel(container) {
   }
 }
 
+function renderProgramPanel(container) {
+  const ref = getProgramReference();
+  const nutrition = ref.nutrition || {};
+  container.innerHTML = '';
+
+  const targets = document.createElement('div');
+  targets.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:10px;';
+  targets.innerHTML = `
+    <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Daily targets</div>
+    <div style="font-size:13px;color:var(--text);">${nutrition.daily_calories || '—'} kcal · ${nutrition.daily_protein_g || '—'}g protein</div>`;
+  container.appendChild(targets);
+
+  if (nutrition.meals?.length) {
+    const mealCard = document.createElement('div');
+    mealCard.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:10px;';
+    nutrition.meals.forEach((meal, i) => {
+      const row = document.createElement('div');
+      row.style.cssText = `padding:12px 16px;${i < nutrition.meals.length - 1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
+      row.innerHTML = `
+        <div style="font-size:14px;font-weight:500;">${meal.meal}</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:2px;">${meal.foods}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px;">~${meal.protein_g}g protein</div>`;
+      mealCard.appendChild(row);
+    });
+    container.appendChild(mealCard);
+  }
+
+  if (ref.supplements?.length) {
+    const supLabel = document.createElement('div');
+    supLabel.style.cssText = 'font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:4px 2px 8px;';
+    supLabel.textContent = 'Supplements';
+    container.appendChild(supLabel);
+
+    const supCard = document.createElement('div');
+    supCard.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:10px;';
+    ref.supplements.forEach((s, i) => {
+      const dose = s.dose_g ? `${s.dose_g}g` : (s.dose || '');
+      const row = document.createElement('div');
+      row.style.cssText = `padding:12px 16px;${i < ref.supplements.length - 1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
+      row.innerHTML = `
+        <div style="font-size:14px;">${s.name}${dose ? ` · ${dose}` : ''}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">${s.timing || ''}</div>`;
+      supCard.appendChild(row);
+    });
+    container.appendChild(supCard);
+  }
+
+  if (ref.exercises_to_avoid?.length) {
+    const avoidLabel = document.createElement('div');
+    avoidLabel.style.cssText = 'font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:4px 2px 8px;';
+    avoidLabel.textContent = 'Exercises to avoid';
+    container.appendChild(avoidLabel);
+
+    const avoidCard = document.createElement('div');
+    avoidCard.className = 'avoid-card';
+    ref.exercises_to_avoid.forEach((item, i) => {
+      const row = document.createElement('div');
+      row.className = 'avoid-row';
+      if (i < ref.exercises_to_avoid.length - 1) row.style.borderBottom = '1px solid #f0ede9';
+      row.innerHTML = `
+        <div class="avoid-name">${item.name}</div>
+        <div class="avoid-reason">${item.reason}</div>`;
+      avoidCard.appendChild(row);
+    });
+    container.appendChild(avoidCard);
+  }
+}
+
 function renderHabitsPanel(container) {
   container.innerHTML = '';
   const hidden = getHiddenBlocks();
+
+  const hint = document.createElement('div');
+  hint.className = 'sortable-hint';
+  hint.textContent = 'Drag ⠿ to reorder · tap − to delete · tap row to edit';
+  container.appendChild(hint);
 
   BLOCK_ORDER.forEach(blockId => {
     const meta = BLOCK_META[blockId];
@@ -2415,6 +2772,7 @@ function renderHabitsPanel(container) {
     container.appendChild(labelRow);
 
     const card = document.createElement('div');
+    card.className = 'sortable-list';
     card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:0;';
     if (blockHabits.length === 0) {
       const empty = document.createElement('div');
@@ -2424,33 +2782,14 @@ function renderHabitsPanel(container) {
     } else {
       blockHabits.forEach((h, i) => {
         const row = document.createElement('div');
-        row.className = 'settings-habit-item';
+        row.className = 'settings-habit-item sortable-item';
+        row.dataset.id = h.id;
         row.style.cssText = `border-radius:0;margin-bottom:0;${i < blockHabits.length - 1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
-        row.innerHTML = `
-          <button type="button" class="settings-habit-delete" aria-label="Delete ${h.label}">−</button>
-          <div class="settings-habit-label">${h.label}</div>
-          <div class="settings-habit-block" style="margin-right:4px">${h.sub || ''}</div>
-          ${h.status === 'buy' ? '<span class="status-badge badge-buy" style="margin-right:4px">BUY</span>' : ''}
-          ${h.status === 'rx' ? '<span class="status-badge badge-rx" style="margin-right:4px">RX</span>' : ''}
-          <div class="settings-habit-reorder">
-            <button type="button" class="habit-move-btn" data-dir="-1" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button>
-            <button type="button" class="habit-move-btn" data-dir="1" aria-label="Move down" ${i === blockHabits.length - 1 ? 'disabled' : ''}>↓</button>
-          </div>
-          <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
-        `;
-        row.querySelector('.settings-habit-delete').addEventListener('click', e => {
-          e.stopPropagation();
-          deleteHabit(h, container);
-        });
-        row.querySelectorAll('.habit-move-btn').forEach(btn => {
-          btn.addEventListener('click', e => {
-            e.stopPropagation();
-            moveHabit(h, blockId, +btn.dataset.dir, container);
-          });
-        });
-        row.addEventListener('click', () => openEditHabit(h));
+        row.innerHTML = buildHabitSettingsRow(h);
+        wireHabitSettingsRow(row, h, container);
         card.appendChild(row);
       });
+      attachSortableList(card, ids => reorderHabitsByIds(ids, container));
     }
     container.appendChild(card);
 
@@ -2463,34 +2802,20 @@ function renderHabitsPanel(container) {
   });
 }
 
-async function moveHabit(habit, blockId, dir, habitsPanelContainer) {
-  const blockHabits = getBlockHabits(blockId);
-  const idx = blockHabits.findIndex(h => h.id === habit.id);
-  const swapIdx = idx + dir;
-  if (idx < 0 || swapIdx < 0 || swapIdx >= blockHabits.length) return;
-
-  const other = blockHabits[swapIdx];
-  const orderA = habit.item_order ?? idx + 1;
-  const orderB = other.item_order ?? swapIdx + 1;
-
+async function removeHabitFromDb(habitId) {
+  if (!habitId) throw new Error('Missing habit id');
   try {
-    await Promise.all([
-      api('habits', 'PATCH', { item_order: orderB }, `?id=eq.${habit.id}`),
-      api('habits', 'PATCH', { item_order: orderA }, `?id=eq.${other.id}`),
-    ]);
-    await loadHabits();
-    renderToday();
-    const panel = habitsPanelContainer || document.getElementById('acc-body-habits');
-    if (panel) renderHabitsPanel(panel);
+    await api('daily_logs', 'DELETE', null, `?habit_id=eq.${habitId}`);
   } catch {
-    showToast('Error reordering habit');
+    // daily_logs delete may fail if RLS missing — habit delete will surface the real error
   }
+  await api('habits', 'DELETE', null, `?id=eq.${habitId}`);
 }
 
 async function deleteHabit(habit, habitsPanelContainer) {
   if (!confirm(`Delete "${habit.label}"?`)) return;
   try {
-    await api('habits', 'DELETE', null, `?id=eq.${habit.id}`);
+    await removeHabitFromDb(habit.id);
     await loadHabits();
     renderToday();
     const panel = habitsPanelContainer || document.getElementById('acc-body-habits');
@@ -2498,13 +2823,34 @@ async function deleteHabit(habit, habitsPanelContainer) {
     const shopBody = document.getElementById('acc-body-shopping');
     if (shopBody) renderShoppingSettings(shopBody);
     showToast('Habit deleted');
-  } catch {
+  } catch (e) {
+    console.error('deleteHabit', e);
     showToast('Error deleting habit');
   }
 }
 
 function renderGymPanel(container) {
   container.innerHTML = '';
+
+  const warmupCard = document.createElement('div');
+  warmupCard.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:10px;cursor:pointer;';
+  const warmupCount = getWarmupExercises().length;
+  warmupCard.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14px;">Corrective warmup</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">${warmupCount} exercises · 3 phases · tap to edit</div>
+      </div>
+      <div style="font-size:18px;color:var(--muted);">›</div>
+    </div>`;
+  warmupCard.addEventListener('click', () => openWarmupModal());
+  container.appendChild(warmupCard);
+
+  const sectionLabel = document.createElement('div');
+  sectionLabel.style.cssText = 'font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.4px;margin:4px 2px 8px;';
+  sectionLabel.textContent = 'Main workouts';
+  container.appendChild(sectionLabel);
+
   const card = document.createElement('div');
   card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
   getAllTemplates().forEach(({ id, name }, i, arr) => {
@@ -2564,8 +2910,10 @@ function renderProfileSettings() {
   if (weightInput) {
     const weightLabel = document.getElementById('profile-weight-label');
     if (weightLabel) weightLabel.textContent = `Weight (${unitLabel()})`;
+    const profile = getProgramProfile();
     api('weekly_logs', 'GET', null, '?order=week_start.desc&limit=1').then(rows => {
       if (rows && rows[0] && rows[0].weight_kg) weightInput.value = toDisplay(rows[0].weight_kg);
+      else if (profile.weight_kg) weightInput.value = profile.weight_kg;
     });
     weightInput.addEventListener('change', async e => {
       const kg = toKg(e.target.value);
@@ -2689,9 +3037,161 @@ function moveExercise(templateId, idx, dir) {
   openGymModal(templateId, gymConfig.templates[templateId]);
 }
 
+function moveWarmupExercise(idx, dir) {
+  const flat = getWarmupFlatForEdit();
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= flat.length) return;
+  [flat[idx], flat[newIdx]] = [flat[newIdx], flat[idx]];
+  saveWarmupFromFlat(flat);
+  saveGymConfig();
+  openWarmupModal();
+}
+
+function getWarmupFlatForEdit() {
+  return getWarmupExercises().map(ex => ({ ...ex }));
+}
+
+function saveWarmupFromFlat(flat) {
+  const phases = [];
+  const phaseMap = {};
+  flat.forEach(ex => {
+    const phaseName = ex.phaseName || 'Warmup';
+    if (!phaseMap[phaseName]) {
+      phaseMap[phaseName] = { name: phaseName, exercises: [] };
+      phases.push(phaseMap[phaseName]);
+    }
+    phaseMap[phaseName].exercises.push({
+      name: ex.name,
+      sets: ex.sets,
+      reps: ex.reps,
+      note: ex.note,
+      cue: ex.cue,
+      side: ex.side,
+      duration_seconds: ex.duration_seconds,
+      logType: ex.logType || 'check',
+    });
+  });
+  gymConfig.warmup = {
+    note: gymConfig.warmup?.note || DEFAULT_GYM_CONFIG.warmup?.note,
+    phases,
+  };
+}
+
+function buildExerciseEditorRows(exercises, onMove) {
+  const card = document.createElement('div');
+  card.style.cssText = 'margin:0 18px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
+
+  exercises.forEach((ex, idx) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid #f0ede9;';
+    if (idx === exercises.length - 1) row.style.borderBottom = 'none';
+    const repsLabel = ex.reps != null ? `${ex.reps} reps` : (ex.note || 'hold/time');
+    row.innerHTML = `
+      <span style="font-size:12px;color:var(--muted);width:18px;text-align:center;flex-shrink:0;">${idx + 1}</span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14px">${ex.name}</div>
+        <div style="font-size:12px;color:var(--muted)">${ex.sets} sets${repsLabel ? ` × ${repsLabel}` : ''}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;">
+        <button type="button" class="exercise-move-btn" data-dir="-1" ${idx === 0 ? 'disabled' : ''}>↑</button>
+        <button type="button" class="exercise-move-btn" data-dir="1" ${idx === exercises.length - 1 ? 'disabled' : ''}>↓</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+        <input type="number" value="${ex.sets}" min="1" max="10" style="width:38px;border:1.5px solid var(--border);border-radius:6px;padding:4px;font-size:13px;text-align:center;background:#fff;" data-idx="${idx}" data-field="sets">
+        <span style="font-size:12px;color:var(--muted)">×</span>
+        <input type="number" value="${ex.reps ?? ''}" min="0" max="50" placeholder="—" style="width:38px;border:1.5px solid var(--border);border-radius:6px;padding:4px;font-size:13px;text-align:center;background:#fff;" data-idx="${idx}" data-field="reps">
+      </div>
+    `;
+    row.querySelectorAll('.exercise-move-btn').forEach(btn => {
+      btn.addEventListener('click', () => onMove(idx, +btn.dataset.dir));
+    });
+    card.appendChild(row);
+  });
+
+  return card;
+}
+
+function readExerciseEditorInputs(card, exercises, { allowNullReps = false } = {}) {
+  card.querySelectorAll('input[data-field]').forEach(input => {
+    const idx = +input.dataset.idx;
+    const field = input.dataset.field;
+    if (field === 'reps' && allowNullReps) {
+      exercises[idx][field] = input.value === '' ? null : +input.value;
+    } else {
+      exercises[idx][field] = +input.value;
+    }
+  });
+}
+
+function openWarmupModal() {
+  const overlay = document.getElementById('gym-modal-overlay');
+  const flat = getWarmupFlatForEdit();
+  document.getElementById('gym-modal-title').textContent = 'Corrective warmup';
+  const body = document.getElementById('gym-modal-body');
+  body.innerHTML = '';
+
+  const hint = document.createElement('div');
+  hint.style.cssText = 'padding:0 18px 8px;font-size:12px;color:var(--muted);';
+  hint.textContent = 'Shown before every gym session. Leave reps blank for timed stretches.';
+  body.appendChild(hint);
+
+  const card = document.createElement('div');
+  card.style.cssText = 'margin:0 18px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
+  let lastPhase = null;
+  flat.forEach((ex, idx) => {
+    if (ex.phaseName && ex.phaseName !== lastPhase) {
+      lastPhase = ex.phaseName;
+      const divider = document.createElement('div');
+      divider.style.cssText = 'padding:8px 14px 4px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;background:#faf9f7;border-bottom:1px solid #f0ede9;';
+      divider.textContent = ex.phaseName;
+      card.appendChild(divider);
+    }
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid #f0ede9;';
+    if (idx === flat.length - 1) row.style.borderBottom = 'none';
+    const repsLabel = ex.reps != null ? `${ex.reps} reps` : (ex.note || 'hold/time');
+    row.innerHTML = `
+      <span style="font-size:12px;color:var(--muted);width:18px;text-align:center;flex-shrink:0;">${idx + 1}</span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14px">${ex.name}</div>
+        <div style="font-size:12px;color:var(--muted)">${ex.sets} sets${repsLabel ? ` × ${repsLabel}` : ''}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;">
+        <button type="button" class="exercise-move-btn" data-dir="-1" ${idx === 0 ? 'disabled' : ''}>↑</button>
+        <button type="button" class="exercise-move-btn" data-dir="1" ${idx === flat.length - 1 ? 'disabled' : ''}>↓</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+        <input type="number" value="${ex.sets}" min="1" max="10" style="width:38px;border:1.5px solid var(--border);border-radius:6px;padding:4px;font-size:13px;text-align:center;background:#fff;" data-idx="${idx}" data-field="sets">
+        <span style="font-size:12px;color:var(--muted)">×</span>
+        <input type="number" value="${ex.reps ?? ''}" min="0" max="50" placeholder="—" style="width:38px;border:1.5px solid var(--border);border-radius:6px;padding:4px;font-size:13px;text-align:center;background:#fff;" data-idx="${idx}" data-field="reps">
+      </div>
+    `;
+    row.querySelectorAll('.exercise-move-btn').forEach(btn => {
+      btn.addEventListener('click', () => moveWarmupExercise(idx, +btn.dataset.dir));
+    });
+    card.appendChild(row);
+  });
+  body.appendChild(card);
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'save-btn';
+  saveBtn.textContent = 'Save changes';
+  saveBtn.addEventListener('click', () => {
+    readExerciseEditorInputs(card, flat, { allowNullReps: true });
+    saveWarmupFromFlat(flat);
+    saveGymConfig();
+    closeGymModal();
+    const gymBody = document.getElementById('acc-body-gym');
+    if (gymBody) renderGymPanel(gymBody);
+    showToast('Warmup updated');
+  });
+  body.appendChild(saveBtn);
+  overlay.classList.add('open');
+}
+
 function openGymModal(templateId, plan) {
   const overlay = document.getElementById('gym-modal-overlay');
-  plan = getTemplateById(templateId) || normalizeGymTemplate(plan, DEFAULT_GYM_TEMPLATES[templateId]);
+  plan = getTemplateById(templateId) || normalizeGymTemplate(plan, DEFAULT_GYM_CONFIG.templates[templateId]);
   gymConfig.templates[templateId] = plan;
   document.getElementById('gym-modal-title').textContent = plan.name;
   const body = document.getElementById('gym-modal-body');
@@ -2702,47 +3202,14 @@ function openGymModal(templateId, plan) {
   hint.textContent = 'Exercises run top to bottom. Use arrows to reorder.';
   body.appendChild(hint);
 
-  const card = document.createElement('div');
-  card.style.cssText = 'margin:0 18px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
-
-  (plan.exercises || []).forEach((ex, idx) => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid #f0ede9;';
-    if (idx === plan.exercises.length - 1) row.style.borderBottom = 'none';
-    const repsLabel = ex.reps != null ? `${ex.reps} reps` : (ex.note || '');
-    row.innerHTML = `
-      <span style="font-size:12px;color:var(--muted);width:18px;text-align:center;flex-shrink:0;">${idx + 1}</span>
-      <div style="flex:1;min-width:0;">
-        <div style="font-size:14px">${ex.name}</div>
-        <div style="font-size:12px;color:var(--muted)">${ex.sets} sets${repsLabel ? ` × ${repsLabel}` : ''}</div>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;">
-        <button type="button" class="exercise-move-btn" data-dir="-1" ${idx === 0 ? 'disabled' : ''}>↑</button>
-        <button type="button" class="exercise-move-btn" data-dir="1" ${idx === plan.exercises.length - 1 ? 'disabled' : ''}>↓</button>
-      </div>
-      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
-        <input type="number" value="${ex.sets}" min="1" max="10" style="width:38px;border:1.5px solid var(--border);border-radius:6px;padding:4px;font-size:13px;text-align:center;background:#fff;" data-idx="${idx}" data-field="sets">
-        <span style="font-size:12px;color:var(--muted)">×</span>
-        <input type="number" value="${ex.reps}" min="1" max="50" style="width:38px;border:1.5px solid var(--border);border-radius:6px;padding:4px;font-size:13px;text-align:center;background:#fff;" data-idx="${idx}" data-field="reps">
-      </div>
-    `;
-    row.querySelectorAll('.exercise-move-btn').forEach(btn => {
-      btn.addEventListener('click', () => moveExercise(templateId, idx, +btn.dataset.dir));
-    });
-    card.appendChild(row);
-  });
-
+  const card = buildExerciseEditorRows(plan.exercises || [], (idx, dir) => moveExercise(templateId, idx, dir));
   body.appendChild(card);
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'save-btn';
   saveBtn.textContent = 'Save changes';
   saveBtn.addEventListener('click', () => {
-    card.querySelectorAll('input[data-field]').forEach(input => {
-      const idx = +input.dataset.idx;
-      const field = input.dataset.field;
-      gymConfig.templates[templateId].exercises[idx][field] = +input.value;
-    });
+    readExerciseEditorInputs(card, gymConfig.templates[templateId].exercises);
     saveGymConfig();
     closeGymModal();
     const gymBody = document.getElementById('acc-body-gym');
@@ -2763,9 +3230,14 @@ function closeGymModal() {
 //   2. Standalone shopping items (block='shopping') — checkable + editable
 
 function renderShoppingSettings(container) {
-  if (!container) container = document.getElementById('shopping-settings');
+  if (!container) container = document.getElementById('acc-body-shopping');
   if (!container) return;
   container.innerHTML = '';
+
+  const hint = document.createElement('div');
+  hint.className = 'sortable-hint';
+  hint.textContent = 'Drag ⠿ to reorder · tap − to remove';
+  container.appendChild(hint);
 
   // Section 1: habit buy-items
   const habitBuyItems = habits.filter(h => h.block !== 'shopping' && h.status === 'buy');
@@ -2779,8 +3251,10 @@ function renderShoppingSettings(container) {
     card.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:10px;';
     habitBuyItems.forEach((h, i) => {
       const row = document.createElement('div');
-      row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 14px;cursor:pointer;${i < habitBuyItems.length-1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
+      row.className = 'settings-habit-item';
+      row.style.cssText = `border-radius:0;margin-bottom:0;${i < habitBuyItems.length - 1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
       row.innerHTML = `
+        <button type="button" class="list-row-delete" aria-label="Remove ${h.label}">−</button>
         <span style="font-size:18px">💊</span>
         <div style="flex:1;min-width:0;">
           <div style="font-size:14px;">${h.label}</div>
@@ -2789,7 +3263,14 @@ function renderShoppingSettings(container) {
         <span class="status-badge badge-buy">BUY</span>
         <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14"><polyline points="7,5 13,10 7,15"/></svg>
       `;
-      row.addEventListener('click', () => openEditHabit(h));
+      row.querySelector('.list-row-delete')?.addEventListener('click', e => {
+        e.stopPropagation();
+        removeBuyHabit(h, container);
+      });
+      row.addEventListener('click', e => {
+        if (e.target.closest('.list-row-delete')) return;
+        openEditHabit(h);
+      });
       card.appendChild(row);
     });
     container.appendChild(card);
@@ -2801,8 +3282,9 @@ function renderShoppingSettings(container) {
   label2.textContent = 'My shopping list';
   container.appendChild(label2);
 
-  const shopItems = habits.filter(h => h.block === 'shopping');
+  const shopItems = getShopItems();
   const card2 = document.createElement('div');
+  card2.className = 'sortable-list';
   card2.style.cssText = 'background:#fff;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;';
 
   if (shopItems.length === 0) {
@@ -2810,9 +3292,13 @@ function renderShoppingSettings(container) {
   } else {
     shopItems.forEach((h, i) => {
       const row = document.createElement('div');
-      row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 14px;${i < shopItems.length-1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
+      row.className = 'settings-habit-item sortable-item';
+      row.dataset.id = h.id;
+      row.style.cssText = `border-radius:0;margin-bottom:0;${i < shopItems.length - 1 ? 'border-bottom:1px solid #f0ede9;' : ''}`;
       const bought = h.status === 'have';
       row.innerHTML = `
+        <button type="button" class="drag-handle" aria-label="Drag to reorder">⠿</button>
+        <button type="button" class="list-row-delete" aria-label="Delete ${h.label}">−</button>
         <div class="habit-check ${bought ? 'checked' : ''}" id="shop-check-${h.id}" style="flex-shrink:0;cursor:pointer;width:26px;height:26px;">${checkSVG()}</div>
         <div style="flex:1;min-width:0;">
           <div style="font-size:14px;${bought ? 'text-decoration:line-through;color:var(--muted);' : ''}">${h.label}</div>
@@ -2820,10 +3306,25 @@ function renderShoppingSettings(container) {
         </div>
         <svg viewBox="0 0 20 20" fill="none" stroke="#ccc" stroke-width="2" width="14" height="14" style="cursor:pointer;flex-shrink:0;" id="shop-edit-${h.id}"><polyline points="7,5 13,10 7,15"/></svg>
       `;
-      row.querySelector(`#shop-check-${h.id}`).addEventListener('click', () => toggleShopItem(h));
-      row.querySelector(`#shop-edit-${h.id}`).addEventListener('click', () => openShopModal(h));
+      row.querySelector('.list-row-delete')?.addEventListener('click', e => {
+        e.stopPropagation();
+        deleteShopItem(h, container);
+      });
+      row.querySelector(`#shop-check-${h.id}`)?.addEventListener('click', e => {
+        e.stopPropagation();
+        toggleShopItem(h);
+      });
+      row.querySelector(`#shop-edit-${h.id}`)?.addEventListener('click', e => {
+        e.stopPropagation();
+        openShopModal(h);
+      });
+      row.addEventListener('click', e => {
+        if (e.target.closest('.drag-handle, .list-row-delete, .habit-check, #shop-edit-' + h.id)) return;
+        openShopModal(h);
+      });
       card2.appendChild(row);
     });
+    attachSortableList(card2, ids => reorderHabitsByIds(ids, false));
   }
   container.appendChild(card2);
 
@@ -2835,12 +3336,45 @@ function renderShoppingSettings(container) {
   container.appendChild(addBtn);
 }
 
+async function removeBuyHabit(h, container) {
+  if (!confirm(`Remove "${h.label}" from your buy list?`)) return;
+  try {
+    await api('habits', 'PATCH', { status: 'have' }, `?id=eq.${h.id}`);
+    await loadHabits();
+    renderToday();
+    renderShoppingSettings(container);
+    renderBuyCard();
+    showToast('Removed from buy list');
+  } catch {
+    showToast('Error updating item');
+  }
+}
+
+async function deleteShopItem(h, container) {
+  if (!confirm(`Delete "${h.label}" from shopping list?`)) return;
+  try {
+    await removeHabitFromDb(h.id);
+    await loadHabits();
+    renderToday();
+    renderShoppingSettings(container);
+    renderBuyCard();
+    showToast('Item removed');
+  } catch (e) {
+    console.error('deleteShopItem', e);
+    showToast('Error deleting item');
+  }
+}
+
 async function toggleShopItem(h) {
   const newStatus = h.status === 'buy' ? 'have' : 'buy';
-  await api('habits', 'PATCH', { status: newStatus }, `?id=eq.${h.id}`);
-  await loadHabits();
-  renderShoppingSettings(document.getElementById('acc-body-shopping'));
-  renderBuyCard();
+  try {
+    await api('habits', 'PATCH', { status: newStatus }, `?id=eq.${h.id}`);
+    await loadHabits();
+    renderShoppingSettings(document.getElementById('acc-body-shopping'));
+    renderBuyCard();
+  } catch {
+    showToast('Error updating item');
+  }
 }
 
 function renderBuyCard() {
@@ -2857,7 +3391,7 @@ function renderBuyCard() {
     buyCard.innerHTML = `
       <div style="padding:11px 14px 6px;display:flex;align-items:center;justify-content:space-between;">
         <span style="font-family:Georgia,serif;font-size:13px;color:#b87000;">🛒 Need to buy (${buyItems.length})</span>
-        <button onclick="document.querySelector('[data-screen=settings]').click();setTimeout(()=>document.getElementById('shopping-settings').scrollIntoView({behavior:'smooth'}),200)" style="background:none;border:none;font-size:11px;color:var(--muted);cursor:pointer;font-family:inherit;">Manage →</button>
+        <button type="button" onclick="navigateToShoppingSettings()" style="background:none;border:none;font-size:11px;color:var(--muted);cursor:pointer;font-family:inherit;">Manage →</button>
       </div>
       <div style="padding:0 14px 12px;display:flex;flex-wrap:wrap;gap:6px;">
         ${buyItems.map(h => `<span style="background:#fff3cd;color:#856404;border:1px solid #f5d87a;border-radius:20px;padding:4px 11px;font-size:13px;">${h.label}</span>`).join('')}
@@ -2880,6 +3414,8 @@ function openShopModal(item) {
     if (item) {
       await api('habits', 'PATCH', payload, `?id=eq.${item.id}`);
     } else {
+      const maxOrder = Math.max(0, ...getShopItems().map(h => h.item_order || 0));
+      payload.item_order = maxOrder + 1;
       await api('habits', 'POST', payload);
     }
     await loadHabits();
@@ -2892,12 +3428,17 @@ function openShopModal(item) {
   deleteBtn.style.display = item ? 'block' : 'none';
   if (item) {
     deleteBtn.onclick = async () => {
-      await api('habits', 'DELETE', null, `?id=eq.${item.id}`);
-      await loadHabits();
-      renderShoppingSettings(document.getElementById('acc-body-shopping'));
-      renderBuyCard();
-      closeShopModal();
-      showToast('Item removed');
+      try {
+        await removeHabitFromDb(item.id);
+        await loadHabits();
+        renderShoppingSettings(document.getElementById('acc-body-shopping'));
+        renderBuyCard();
+        closeShopModal();
+        showToast('Item removed');
+      } catch (e) {
+        console.error('shop modal delete', e);
+        showToast('Error deleting item');
+      }
     };
   }
   overlay.classList.add('open');
@@ -3013,4 +3554,5 @@ document.getElementById('shop-modal-overlay').addEventListener('click', e => {
 document.getElementById('shop-modal-close').addEventListener('click', closeShopModal);
 
 // ─── START ────────────────────────────────────────────────────────────────────
+window.navigateToShoppingSettings = navigateToShoppingSettings;
 init();
