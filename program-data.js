@@ -282,40 +282,51 @@ function buildProgramHabits(program = SAMERTH_PROGRAM) {
     habits.push({ label, block, sub, freq, status, item_order: order++, notes });
   };
 
-  // Morning skincare
-  add('AM skincare', 'morning', 'Wash → Arencia Vit C → CeraVe ultra-light → sheer zinc SPF');
+  // ─── MORNING SKINCARE ───
+  add('Face wash', 'morning', 'Gentle cleanser');
+  add('Arencia vitamin C', 'morning', 'After wash, before moisturizer');
+  add('CeraVe ultra-light moisturizer', 'morning', 'Let absorb before SPF');
+  add('Sheer zinc mineral SPF', 'morning', 'Last step before leaving');
 
-  // Morning supplements
-  add('Creatine 5g', 'morning', program.supplements.find(s => s.name === 'Creatine')?.timing || '');
-  add('B12', 'morning', 'With breakfast');
-  add('Ashwagandha', 'morning', 'Same time daily');
+  // ─── MORNING SUPPLEMENTS ───
+  add('Omega-3 + D3 + K2 + B12', 'morning', 'With or after breakfast');
+  add('Creatine 5g', 'morning', 'Any time — consistency matters');
+  add('Ashwagandha', 'morning', 'Daytime dose');
+  add('Magnesium', 'morning', 'Daytime ok');
 
-  // Oral antibiotic (finishing remaining doses)
-  add('Oral antibiotic (minocycline)', 'morning', 'Finish remaining doses', 'daily', '', 'rx');
+  // ─── MORNING NUTRITION ───
+  add('Morning protein', 'morning', '3 eggs + Greek yogurt · ~35g');
 
-  // Morning nutrition
-  add('Morning protein', 'morning', '3 eggs + Greek yogurt · ~35g', 'daily');
-
-  // Midday
+  // ─── MIDDAY / WORKDAY ───
   add('Whey isolate (1.5 scoops)', 'midday', '40g protein target');
-  add('Vitamin D3', 'midday', 'With tiffin — fat-containing meal');
-  add('Omega-3', 'midday', 'Supports joints and recovery');
   add('Tiffin meal 1', 'midday', 'Dal/egg + roti · ~20g protein', 'weekdays');
   add('Tiffin meal 2', 'midday', 'Chicken + rice · ~40g protein', 'weekdays');
 
-  // Evening skincare
-  add('PM skincare', 'evening', 'Wash → CeraVe → Differin (adapalene) → minoxidil (hair/temples)');
-  add('Evening protein', 'evening', 'Cottage cheese or shake · ~25g', 'daily');
+  // ─── PRE-GYM / PHYSIO ───
+  add('Corrective warmup', 'physio', 'Do before gym — right QL, hip flexor, glute med focus', 'gym_days');
+  add('Gym session', 'physio', 'Mon Upper Push / Tue Lower Quad / Thu Upper Pull / Fri Lower Hamstring', 'gym_days');
 
-  // Hair/scalp treatment
-  add('Ketoconazole 1% shampoo', 'evening', 'Nizoral on scalp + beard, leave 3–5 min', '3x_week');
+  // ─── EVENING SKINCARE ───
+  add('Face wash (PM)', 'evening', 'Remove day buildup');
+  add('CeraVe moisturizer', 'evening', 'Before actives');
+  add('Differin (adapalene)', 'evening', 'Nightly — wait 5 min after moisturizer');
+  add('Minoxidil 5% foam', 'evening', 'Hair/temples — let dry before bed');
 
-  // Bedtime
-  add('Magnesium', 'bedtime', 'Before bed');
-  add('Zinc', 'bedtime', '30 min after magnesium');
+  // ─── EVENING MEDS ───
+  add('Oral antibiotic (minocycline)', 'evening', 'With dinner — finish remaining doses', 'daily', '', 'rx');
 
-  // Weekend
+  // ─── EVENING NUTRITION ───
+  add('Evening protein', 'evening', 'Cottage cheese or shake · ~25g');
+
+  // ─── EVENING SUPPLEMENTS ───
+  add('Zinc', 'evening', 'Optional 3–5×/week', '3x_week');
+
+  // ─── SCALP / HAIR (3×/week) ───
+  add('Ketoconazole 1% shampoo (Nizoral)', 'evening', 'Scalp + beard, leave 3–5 min; 3×/week knockdown then weekly', '3x_week');
+
+  // ─── WEEKEND ───
   add('Outdoor walk', 'morning', '45–60 min · seawall or QE Park', 'weekends');
+  add('Home corrective routine', 'physio', 'Wednesday full session at home', 'wed_only');
 
   return habits;
 }
