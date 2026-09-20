@@ -1,6 +1,6 @@
 // Samerth Training Program — source of truth for gym plan, habits, and reference data
 // PRIMARY GOAL: Fix right hip and knee pain. Recomp is secondary.
-const PROGRAM_VERSION = 3;
+const PROGRAM_VERSION = 4;
 
 const DAY_NAME_TO_DOW = {
   Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
@@ -323,6 +323,7 @@ function buildProgramHabits(program = SAMERTH_PROGRAM) {
   add('Tiffin meal 1', 'midday', 'Dal/egg + roti · ~20g protein', 'weekdays');
   add('Tiffin meal 2', 'midday', 'Chicken + rice · ~40g protein', 'weekdays');
   add('Posture break / hip openers', 'midday', '2-3 min if desk-bound', 'weekdays', 'Optional');
+  add('English conversation / accent practice', 'midday', '30 min with Communication Bot · 12:00–12:30 PT', 'daily');
 
   // ─── PRE-GYM / PHYSIO (block: physio) ───
   add('Pain block (~18 min)', 'physio', 'Right hip & knee — MANDATORY before lifting', 'gym_days');
