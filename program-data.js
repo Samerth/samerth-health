@@ -1,5 +1,5 @@
 // Samerth Training Program — source of truth for gym plan, habits, and reference data
-const PROGRAM_VERSION = 1;
+const PROGRAM_VERSION = 2;
 
 const DAY_NAME_TO_DOW = {
   Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
@@ -173,7 +173,7 @@ const SAMERTH_PROGRAM = {
     { name: 'Heavy Shrugs', reason: 'Worsens left neck tension' },
     { name: 'Behind The Neck Anything', reason: 'Dangerous with forward head posture' },
     { name: 'Running', reason: 'Reinforces hip pattern under speed and load' },
-    { name: 'HIIT', reason: 'Reinforces hip pattern, kills recovery, joint stress on Accutane' },
+    { name: 'HIIT', reason: 'Reinforces hip pattern, kills recovery, high joint stress' },
     { name: 'Sit-ups / Crunches', reason: 'Worsens forward head posture and spinal flexion pattern' },
   ],
   nutrition: {
@@ -191,7 +191,7 @@ const SAMERTH_PROGRAM = {
     { name: 'Creatine', dose_g: 5, timing: 'Any time daily — consistency matters' },
     { name: 'Whey Isolate', dose: '1.5 scoops', timing: 'Post-workout or midday' },
     { name: 'Vitamin D3', timing: 'With tiffin — fat containing meal' },
-    { name: 'Omega-3', timing: 'With tiffin — critical on Accutane for joints' },
+    { name: 'Omega-3', timing: 'With tiffin — supports joints and recovery' },
     { name: 'B12', timing: 'Morning' },
     { name: 'Magnesium', timing: 'Before bed' },
     { name: 'Zinc', timing: 'Before bed, 30 min gap from magnesium' },
@@ -278,27 +278,55 @@ function buildProgramHabits(program = SAMERTH_PROGRAM) {
   const habits = [];
   let order = 1;
 
-  const add = (label, block, sub, freq = 'daily', notes = '') => {
-    habits.push({ label, block, sub, freq, status: 'have', item_order: order++, notes });
+  const add = (label, block, sub, freq = 'daily', notes = '', status = 'have') => {
+    habits.push({ label, block, sub, freq, status, item_order: order++, notes });
   };
 
-  add('Creatine 5g', 'morning', program.supplements.find(s => s.name === 'Creatine')?.timing || '');
-  add('B12', 'morning', 'With breakfast');
-  add('Ashwagandha', 'morning', 'Same time daily');
+  // ─── MORNING SKINCARE ───
+  add('Face wash', 'morning', 'Gentle cleanser');
+  add('Arencia vitamin C', 'morning', 'After wash, before moisturizer');
+  add('CeraVe ultra-light moisturizer', 'morning', 'Let absorb before SPF');
+  add('Sheer zinc mineral SPF', 'morning', 'Last step before leaving');
 
+  // ─── MORNING SUPPLEMENTS ───
+  add('Omega-3 + D3 + K2 + B12', 'morning', 'With or after breakfast');
+  add('Creatine 5g', 'morning', 'Any time — consistency matters');
+  add('Ashwagandha', 'morning', 'Daytime dose');
+  add('Magnesium', 'morning', 'Daytime ok');
+
+  // ─── MORNING NUTRITION ───
+  add('Morning protein', 'morning', '3 eggs + Greek yogurt · ~35g');
+
+  // ─── MIDDAY / WORKDAY ───
   add('Whey isolate (1.5 scoops)', 'midday', '40g protein target');
-  add('Vitamin D3', 'midday', 'With tiffin — fat-containing meal');
-  add('Omega-3', 'midday', 'Critical on Accutane for joints');
   add('Tiffin meal 1', 'midday', 'Dal/egg + roti · ~20g protein', 'weekdays');
   add('Tiffin meal 2', 'midday', 'Chicken + rice · ~40g protein', 'weekdays');
 
-  add('Morning protein', 'morning', '3 eggs + Greek yogurt · ~35g', 'daily');
-  add('Evening protein', 'evening', 'Cottage cheese or shake · ~25g', 'daily');
+  // ─── PRE-GYM / PHYSIO ───
+  add('Corrective warmup', 'physio', 'Do before gym — right QL, hip flexor, glute med focus', 'gym_days');
+  add('Gym session', 'physio', 'Mon Upper Push / Tue Lower Quad / Thu Upper Pull / Fri Lower Hamstring', 'gym_days');
 
-  add('Magnesium', 'bedtime', 'Before bed');
-  add('Zinc', 'bedtime', '30 min after magnesium');
+  // ─── EVENING SKINCARE ───
+  add('Face wash (PM)', 'evening', 'Remove day buildup');
+  add('CeraVe moisturizer', 'evening', 'Before actives');
+  add('Differin (adapalene)', 'evening', 'Nightly — wait 5 min after moisturizer');
+  add('Minoxidil 5% foam', 'evening', 'Hair/temples — let dry before bed');
 
+  // ─── EVENING MEDS ───
+  add('Oral antibiotic (minocycline)', 'evening', 'With dinner — finish remaining doses', 'daily', '', 'rx');
+
+  // ─── EVENING NUTRITION ───
+  add('Evening protein', 'evening', 'Cottage cheese or shake · ~25g');
+
+  // ─── EVENING SUPPLEMENTS ───
+  add('Zinc', 'evening', 'Optional 3–5×/week', '3x_week');
+
+  // ─── SCALP / HAIR (3×/week) ───
+  add('Ketoconazole 1% shampoo (Nizoral)', 'evening', 'Scalp + beard, leave 3–5 min; 3×/week knockdown then weekly', '3x_week');
+
+  // ─── WEEKEND ───
   add('Outdoor walk', 'morning', '45–60 min · seawall or QE Park', 'weekends');
+  add('Home corrective routine', 'physio', 'Wednesday full session at home', 'wed_only');
 
   return habits;
 }
