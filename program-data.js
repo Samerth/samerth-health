@@ -245,31 +245,32 @@ function buildGymConfigFromProgram(program = SAMERTH_PROGRAM) {
   program.sessions.forEach(s => { sessionsById[s.id] = s; });
 
   const painBlockSession = sessionsById.pain_block;
-  const painBlock = {
-    name: painBlockSession?.name,
-    note: painBlockSession?.note,
-    duration_min: painBlockSession?.duration_min,
-    exercises: (painBlockSession?.exercises || []).map(mapProgramExercise),
-  };
-
   const postureSession = sessionsById.scap_posture_work;
-  const postureBlock = {
-    name: postureSession?.name,
-    note: postureSession?.note,
-    duration_min: postureSession?.duration_min,
-    exercises: (postureSession?.exercises || []).map(mapProgramExercise),
+
+  const warmup = {
+    note: 'MANDATORY: Right hip & knee pain block first. Stop lifts if right hip/knee >4/10.',
+    phases: [
+      {
+        name: painBlockSession?.name || 'Priority: Right Hip & Knee',
+        exercises: (painBlockSession?.exercises || []).map(mapProgramExercise),
+      },
+      {
+        name: postureSession?.name || 'Scap & Posture',
+        exercises: (postureSession?.exercises || []).map(mapProgramExercise),
+      },
+    ],
   };
 
   const templates = {};
   program.sessions
-    .filter(s => s.type !== 'pain_block' && s.type !== 'posture')
+    .filter(s => s.day != null)
     .forEach(s => {
+      const isMainSession = s.type === 'main';
       templates[s.id] = {
         name: s.name,
         sessionType: s.type,
         sessionNote: s.session_note || undefined,
-        includePainBlock: !!s.pain_block_id,
-        includePostureBlock: !!s.posture_block_id,
+        includeWarmup: isMainSession,
         exercises: (s.exercises || []).map(mapProgramExercise),
       };
     });
@@ -282,7 +283,7 @@ function buildGymConfigFromProgram(program = SAMERTH_PROGRAM) {
     if (match && dow != null) schedule[dow] = match.id;
   });
 
-  return { templates, schedule, painBlock, postureBlock };
+  return { templates, schedule, warmup };
 }
 
 function getProgramMeta(program = SAMERTH_PROGRAM) {
