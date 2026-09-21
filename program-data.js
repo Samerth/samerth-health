@@ -1,6 +1,6 @@
 // Samerth Training Program — source of truth for gym plan, habits, and reference data
 // PRIMARY GOAL: Fix right hip and knee pain. Recomp is secondary.
-const PROGRAM_VERSION = 5;
+const PROGRAM_VERSION = 6;
 
 const DAY_NAME_TO_DOW = {
   Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
@@ -28,33 +28,17 @@ const SAMERTH_PROGRAM = {
   sessions: [
     {
       id: 'pain_block',
-      name: 'Priority: Right Hip & Knee Pain Block',
+      name: 'Short Pain Block',
       type: 'pain_block',
-      duration_min: 18,
-      note: 'MANDATORY before every gym session. This is the primary work — do not skip or rush.',
+      duration_min: 12,
+      note: 'MANDATORY before every gym session. Short but essential — do not skip.',
       exercises: [
-        { name: 'Right Hip Flexor Stretch', sets: 3, reps: null, duration_seconds: 45, weight_kg: 0, side: 'RIGHT', cue: 'Kneeling lunge, right knee down, tuck pelvis, push hips forward gently' },
-        { name: 'Right QL Stretch', sets: 3, reps: null, duration_seconds: 45, weight_kg: 0, side: 'RIGHT', cue: 'Stand, reach left arm overhead and bend left, feel right side stretch' },
-        { name: 'Side-Lying Hip Abduction', sets: 3, reps: 12, duration_seconds: null, weight_kg: 0, side: 'RIGHT first', cue: 'Right side first. Slow lift, 2s hold at top, control descent. Feel glute med.' },
-        { name: 'Banded Clamshells', sets: 3, reps: 12, duration_seconds: null, weight_kg: 0, side: 'RIGHT first', cue: 'Right side first. Slow, hold at top 2s, don\'t let pelvis rock back.' },
-        { name: 'Dead Bug', sets: 3, reps: 8, duration_seconds: null, weight_kg: 0, side: 'each side', cue: 'Exhale fully before moving, lower back flat on floor throughout. Slow.' },
-        { name: 'Single-Leg Glute Bridge', sets: 3, reps: 12, duration_seconds: null, weight_kg: 0, side: 'RIGHT only', cue: 'Drive through right heel, squeeze right glute hard at top. This is key.' },
-        { name: 'Standing Hip Abduction', sets: 3, reps: 10, duration_seconds: null, weight_kg: 0, side: 'each side', cue: 'Toe tap reset between reps. Don\'t lean trunk sideways. Right first.' },
-        { name: 'Copenhagen Plank', sets: 3, reps: null, duration_seconds: 25, weight_kg: 0, side: 'RIGHT bias', cue: 'Keep hips level. Don\'t let right hip drop. Adductor + core.' },
-        { name: 'Banded TKE (Terminal Knee Extension)', sets: 2, reps: 15, duration_seconds: null, weight_kg: 0, side: 'RIGHT', cue: 'Band behind right knee, squeeze quad to full lock. Hold 1s. Knee rehab priority.' },
-        { name: 'Controlled Step-Downs', sets: 2, reps: 8, duration_seconds: null, weight_kg: 0, side: 'RIGHT', cue: 'Right leg on step, lower left heel to ground SLOWLY. Skip if sharp knee pain >3/10.' },
-      ],
-    },
-    {
-      id: 'scap_posture_work',
-      name: 'Scap & Posture Integration',
-      type: 'posture',
-      duration_min: 5,
-      note: 'Quick posture reset — face-pull style scap work + chin tucks.',
-      exercises: [
-        { name: 'Wall Chin Tucks', sets: 2, reps: 10, duration_seconds: null, weight_kg: 0, side: 'BOTH', cue: 'Stand against wall, push head back, hold 3 seconds each rep' },
-        { name: 'Band Pull-Aparts', sets: 2, reps: 15, duration_seconds: null, weight_kg: 0, side: 'BOTH', cue: 'Squeeze shoulder blades together at end of every rep. Face-pull motion.' },
-        { name: 'Wall Slides', sets: 2, reps: 10, duration_seconds: null, weight_kg: 0, side: 'BOTH', cue: 'Arms slide up wall, keep both shoulders back and down throughout' },
+        { name: 'Right Hip Flexor Stretch', sets: 2, reps: null, duration_seconds: 40, weight_kg: 0, side: 'RIGHT', cue: 'Kneeling lunge, right knee down, tuck pelvis, push hips forward gently' },
+        { name: 'Right QL Stretch', sets: 2, reps: null, duration_seconds: 40, weight_kg: 0, side: 'RIGHT', cue: 'Stand, reach left arm overhead and bend left, feel right side stretch' },
+        { name: 'Banded Clamshells', sets: 2, reps: 12, duration_seconds: null, weight_kg: 0, side: 'RIGHT first', cue: 'Right side first. Slow, hold at top 2s, don\'t let pelvis rock back.' },
+        { name: 'Single-Leg Glute Bridge', sets: 2, reps: 10, duration_seconds: null, weight_kg: 0, side: 'RIGHT only', cue: 'Drive through right heel, squeeze right glute hard at top. This is key.' },
+        { name: 'Dead Bug', sets: 2, reps: 6, duration_seconds: null, weight_kg: 0, side: 'each side', cue: 'Exhale fully before moving, lower back flat on floor throughout. Slow.' },
+        { name: 'Banded TKE', sets: 2, reps: 12, duration_seconds: null, weight_kg: 0, side: 'RIGHT', cue: 'Band behind right knee, squeeze quad to full lock. Hold 1s. Knee rehab priority.' },
       ],
     },
     {
@@ -63,15 +47,12 @@ const SAMERTH_PROGRAM = {
       day: 'Monday',
       type: 'main',
       pain_block_id: 'pain_block',
-      posture_block_id: 'scap_posture_work',
-      session_note: 'Pain block is MANDATORY (~18 min). Stop any lift if right hip/knee >4/10. No OHP. No dips.',
+      session_note: 'Short pain block MANDATORY (~12 min). Stop if right hip/knee >4/10. No OHP/dips.',
       exercises: [
-        { name: 'Incline DB Press', sets: 3, reps: 10, weight_kg: null, cue: 'Right shoulder back and down before every set. Don\'t let it creep forward.' },
+        { name: 'Incline DB Press', sets: 3, reps: 10, weight_kg: null, cue: 'Chin tucked, shoulders back and down. Control descent.' },
         { name: 'Landmine Press', sets: 3, reps: 10, weight_kg: null, side: 'each side', cue: 'Shoulder safe pressing. Control the descent.' },
-        { name: 'Cable Lateral Raise', sets: 3, reps: 15, weight_kg: null, cue: 'Controlled, no momentum. Feel the side delt.' },
-        { name: 'Face Pulls', sets: 3, reps: 15, weight_kg: null, cue: 'Pull to nose level, flare elbows high. Posture priority.' },
+        { name: 'Face Pulls', sets: 3, reps: 15, weight_kg: null, cue: 'Pull to nose level, elbows high. Posture work built in.' },
         { name: 'Tricep Pushdown', sets: 3, reps: 12, weight_kg: null, cue: 'Elbows tucked, full extension at bottom' },
-        { name: 'OH Tricep Extension', sets: 3, reps: 12, weight_kg: null, cue: 'Control the eccentric, don\'t flare elbows' },
       ],
     },
     {
@@ -80,15 +61,11 @@ const SAMERTH_PROGRAM = {
       day: 'Tuesday',
       type: 'main',
       pain_block_id: 'pain_block',
-      posture_block_id: 'scap_posture_work',
-      session_note: 'Pain block is MANDATORY (~18 min). RIGHT leg first on all unilateral. Shorten ROM or swap to leg press if knee >3-4/10. Avoid deep lunges when knee angry. Stop if right hip/knee >4/10.',
+      session_note: 'Short pain block MANDATORY (~12 min). RIGHT leg first. Stop if right hip/knee >4/10. Swap to leg press if squats aggravate knee.',
       exercises: [
-        { name: 'Goblet Squat', sets: 3, reps: 10, weight_kg: null, cue: 'Watch right hip in mirror. Don\'t let it hike up. Depth to comfort only.' },
-        { name: 'Bulgarian Split Squat', sets: 3, reps: 10, weight_kg: null, side: 'each side', cue: 'RIGHT leg first. Check hip level. Shorten ROM if knee >3/10.' },
-        { name: 'Leg Press', sets: 3, reps: 12, weight_kg: null, cue: 'Feet even, watch right knee tracks over toe. Use this if squats aggravate knee.' },
+        { name: 'Goblet Squat OR Leg Press', sets: 3, reps: 10, weight_kg: null, cue: 'Watch right hip in mirror. Depth to comfort. Use leg press if knee angry.' },
+        { name: 'Bulgarian Split Squat', sets: 3, reps: 8, weight_kg: null, side: 'each side', cue: 'RIGHT leg first. Short ROM. Skip if knee >3/10.' },
         { name: 'RDL', sets: 3, reps: 10, weight_kg: null, cue: 'Hip hinge, no spinal rounding. Push hips back. Knee-friendly.' },
-        { name: 'Pallof Press', sets: 3, reps: 10, weight_kg: null, side: 'each side', cue: 'Stand tall, brace before pressing, don\'t rotate' },
-        { name: 'Incline Treadmill Walk', sets: 1, reps: null, duration_seconds: 900, weight_kg: 0, cue: 'After session. Incline 8-10%, HR 120-135 bpm' },
       ],
     },
     {
@@ -96,21 +73,15 @@ const SAMERTH_PROGRAM = {
       name: 'Home Pain Block',
       day: 'Wednesday',
       type: 'pain_block',
-      duration_min: 25,
-      session_note: 'Dedicated pain block day. No gym. Focus entirely on right hip/knee rehab + posture.',
+      duration_min: 12,
+      session_note: 'Same 6-move short pain block. No gym. Focus on right hip/knee rehab.',
       exercises: [
-        { name: 'Right Pec Minor Stretch', sets: 3, reps: null, duration_seconds: 45, weight_kg: 0, side: 'RIGHT', cue: 'Doorway, arm at 90°, lean forward gently' },
-        { name: 'Right Hip Flexor Stretch', sets: 3, reps: null, duration_seconds: 45, weight_kg: 0, side: 'RIGHT', cue: 'Kneeling lunge, right knee down, tuck pelvis, push hips forward' },
-        { name: 'Right QL Stretch', sets: 3, reps: null, duration_seconds: 45, weight_kg: 0, side: 'RIGHT', cue: 'Stand, reach left arm overhead and bend left, feel right side stretch' },
-        { name: 'Banded Clamshells', sets: 3, reps: 12, weight_kg: 0, side: 'RIGHT first', cue: 'Slow, hold at top 2s' },
-        { name: 'Dead Bug', sets: 3, reps: 8, weight_kg: 0, side: 'each side', cue: 'Back flat, exhale fully. Slow and controlled.' },
-        { name: 'Hip CARs', sets: 3, reps: 8, weight_kg: 0, side: 'each side', cue: 'Full range circles, keep spine completely still' },
-        { name: 'Standing Hip Abduction', sets: 3, reps: 10, weight_kg: 0, side: 'each side', cue: 'Toe tap reset between reps. Right first.' },
-        { name: 'Single-Leg Glute Bridge', sets: 3, reps: 12, weight_kg: 0, side: 'RIGHT only', cue: 'Drive through right heel, squeeze right glute at top' },
-        { name: 'Side Plank', sets: 3, reps: null, duration_seconds: 30, weight_kg: 0, side: 'RIGHT bias', cue: 'Lift from hip not waist. Right side priority.' },
-        { name: 'Wall Chin Tucks', sets: 3, reps: 10, weight_kg: 0, cue: 'Hold 3 seconds each rep' },
-        { name: 'Banded TKE', sets: 2, reps: 15, weight_kg: 0, side: 'RIGHT', cue: 'Band behind right knee, squeeze quad to full lock' },
-        { name: 'Controlled Step-Downs', sets: 2, reps: 8, weight_kg: 0, side: 'RIGHT', cue: 'Right leg on step, lower left heel SLOWLY. Skip if sharp pain.' },
+        { name: 'Right Hip Flexor Stretch', sets: 2, reps: null, duration_seconds: 40, weight_kg: 0, side: 'RIGHT', cue: 'Kneeling lunge, right knee down, tuck pelvis, push hips forward' },
+        { name: 'Right QL Stretch', sets: 2, reps: null, duration_seconds: 40, weight_kg: 0, side: 'RIGHT', cue: 'Stand, reach left arm overhead and bend left, feel right side stretch' },
+        { name: 'Banded Clamshells', sets: 2, reps: 12, weight_kg: 0, side: 'RIGHT first', cue: 'Slow, hold at top 2s' },
+        { name: 'Single-Leg Glute Bridge', sets: 2, reps: 10, weight_kg: 0, side: 'RIGHT only', cue: 'Drive through right heel, squeeze right glute at top' },
+        { name: 'Dead Bug', sets: 2, reps: 6, weight_kg: 0, side: 'each side', cue: 'Back flat, exhale fully. Slow and controlled.' },
+        { name: 'Banded TKE', sets: 2, reps: 12, weight_kg: 0, side: 'RIGHT', cue: 'Band behind right knee, squeeze quad to full lock' },
       ],
     },
     {
@@ -119,17 +90,12 @@ const SAMERTH_PROGRAM = {
       day: 'Thursday',
       type: 'main',
       pain_block_id: 'pain_block',
-      posture_block_id: 'scap_posture_work',
-      session_note: 'Pain block is MANDATORY (~18 min). Stop any lift if right hip/knee >4/10.',
+      session_note: 'Short pain block MANDATORY (~12 min). Stop if right hip/knee >4/10.',
       exercises: [
-        { name: 'Seated Cable Row', sets: 3, reps: 10, weight_kg: null, cue: 'Pause 2s at chest. Both shoulder blades squeeze. Equal both sides.' },
-        { name: 'Lat Pulldown', sets: 3, reps: 10, weight_kg: null, cue: 'Pull elbows down equally both sides. Don\'t let right shoulder elevate.' },
-        { name: 'Single-Arm DB Row', sets: 3, reps: 12, weight_kg: null, side: 'each side', cue: 'Right side — pull elbow to ceiling. Feel right blade retract.' },
-        { name: 'Rear Delt Fly', sets: 3, reps: 15, weight_kg: null, cue: 'Control the movement, squeeze rear delts at top' },
-        { name: 'Face Pulls', sets: 3, reps: 15, weight_kg: null, cue: 'Pull to nose level, elbows high and wide. Posture priority.' },
-        { name: 'Y-T-W Raises', sets: 2, reps: 10, weight_kg: null, cue: 'Light weight. Face down on incline bench. Feel shoulder blade move.' },
-        { name: 'Hammer Curl', sets: 3, reps: 12, weight_kg: null, cue: 'Neutral grip, control the eccentric' },
-        { name: 'Incline DB Curl', sets: 2, reps: 10, weight_kg: null, cue: 'Full stretch at bottom, don\'t swing' },
+        { name: 'Seated Cable Row', sets: 3, reps: 10, weight_kg: null, cue: 'Pause 2s at chest. Chin tucked, shoulder blades squeeze.' },
+        { name: 'Lat Pulldown', sets: 3, reps: 10, weight_kg: null, cue: 'Pull elbows down equally. Don\'t let right shoulder elevate.' },
+        { name: 'Face Pulls', sets: 3, reps: 15, weight_kg: null, cue: 'Pull to nose level, elbows high. Posture work built in.' },
+        { name: 'Single-Arm DB Row', sets: 3, reps: 10, weight_kg: null, side: 'each side', cue: 'Right side — pull elbow to ceiling. Feel right blade retract.' },
       ],
     },
     {
@@ -138,15 +104,11 @@ const SAMERTH_PROGRAM = {
       day: 'Friday',
       type: 'main',
       pain_block_id: 'pain_block',
-      posture_block_id: 'scap_posture_work',
-      session_note: 'Pain block is MANDATORY (~18 min). RIGHT leg first on all unilateral. Shorten ROM or swap exercises if knee >3-4/10. Stop if right hip/knee >4/10.',
+      session_note: 'Short pain block MANDATORY (~12 min). RIGHT leg first. Stop if right hip/knee >4/10.',
       exercises: [
-        { name: 'Hip Thrust', sets: 3, reps: 12, weight_kg: null, cue: 'Both heels drive equally. Watch for right hip hiking. Squeeze both glutes at top.' },
-        { name: 'Deficit Reverse Lunge', sets: 3, reps: 10, weight_kg: null, side: 'each side', cue: 'RIGHT leg first. Control descent. Skip deficit if knee angry.' },
+        { name: 'Hip Thrust', sets: 3, reps: 10, weight_kg: null, cue: 'Both heels drive equally. Watch for right hip hiking. Squeeze glutes at top.' },
         { name: 'Seated Leg Curl', sets: 3, reps: 12, weight_kg: null, cue: 'Full range, slow eccentric, squeeze at top. Knee-friendly.' },
         { name: 'Single-Leg RDL', sets: 3, reps: 8, weight_kg: null, side: 'each side', cue: 'RIGHT leg standing first. Move slow. Hip level throughout.' },
-        { name: 'Side-Lying Hip Abduction', sets: 3, reps: 15, weight_kg: 0, side: 'RIGHT focus', cue: 'Slow and controlled, don\'t let hip roll back' },
-        { name: 'Incline Treadmill Walk', sets: 1, reps: null, duration_seconds: 900, weight_kg: 0, cue: 'After session. Incline 8-10%, HR 120-135 bpm' },
       ],
     },
     {
@@ -182,15 +144,13 @@ const SAMERTH_PROGRAM = {
     ],
   },
   supplements: [
-    { name: 'Creatine', dose_g: 5, timing: 'Morning — consistency matters' },
-    { name: 'Omega-3', timing: 'Morning with breakfast' },
-    { name: 'Vitamin D3', timing: 'Morning with breakfast' },
-    { name: 'Vitamin K2', timing: 'Morning with breakfast' },
-    { name: 'B12', timing: 'Morning' },
-    { name: 'Ashwagandha', timing: 'Morning (daytime)' },
-    { name: 'Magnesium', timing: 'Morning (daytime) or evening' },
+    { name: 'Vitamin D3 + K2', dose: '1000 IU', timing: 'With breakfast fat', brand: 'Organika', note: 'recheck labs with clinician' },
+    { name: 'Vitamin B12', dose: '1000 mcg', timing: 'Sublingual with breakfast', note: 'recheck labs' },
+    { name: 'Omega-3 (EPA/DHA)', timing: 'With breakfast', brand: 'Jamieson Extra Strength' },
+    { name: 'Creatine', dose_g: 5, timing: 'Daily with breakfast' },
+    { name: 'Magnesium', timing: 'Morning with breakfast', note: '≥2h from evening minocycline' },
     { name: 'Whey Isolate', dose: '1.5 scoops', timing: 'Afternoon' },
-    { name: 'Zinc', timing: 'Evening 3x/week' },
+    { name: 'Zinc bisglycinate', dose: '50 mg', timing: 'Evening', freq: '3x_week', brand: 'Webber', note: '≥2h after minocycline · not for indefinite daily use' },
   ],
   skincare: {
     morning: [
@@ -245,18 +205,13 @@ function buildGymConfigFromProgram(program = SAMERTH_PROGRAM) {
   program.sessions.forEach(s => { sessionsById[s.id] = s; });
 
   const painBlockSession = sessionsById.pain_block;
-  const postureSession = sessionsById.scap_posture_work;
 
   const warmup = {
-    note: 'MANDATORY: Right hip & knee pain block first. Stop lifts if right hip/knee >4/10.',
+    note: 'MANDATORY: Short pain block (~12 min) first. Posture via Face Pulls + chin cues. Stop lifts if right hip/knee >4/10.',
     phases: [
       {
-        name: painBlockSession?.name || 'Priority: Right Hip & Knee',
+        name: painBlockSession?.name || 'Short Pain Block',
         exercises: (painBlockSession?.exercises || []).map(mapProgramExercise),
-      },
-      {
-        name: postureSession?.name || 'Scap & Posture',
-        exercises: (postureSession?.exercises || []).map(mapProgramExercise),
       },
     ],
   };
@@ -312,10 +267,11 @@ function buildProgramHabits(program = SAMERTH_PROGRAM) {
   add('Arencia vitamin C', 'morning', 'After cleanse');
   add('CeraVe ultra-light moisturizer', 'morning', 'After vitamin C');
   add('Sheer zinc mineral SPF', 'morning', 'Last skincare step');
-  add('Omega-3 + D3 + K2 + B12', 'morning', 'With/after breakfast');
-  add('Creatine 5g', 'morning', 'Consistency matters');
-  add('Ashwagandha', 'morning', 'Daytime dose');
-  add('Magnesium', 'morning', 'Daytime dose');
+  add('Vitamin D3 + K2 (1000 IU)', 'morning', 'With breakfast fat · Organika', 'daily', 'recheck labs with clinician');
+  add('Vitamin B12 1000 mcg', 'morning', 'Sublingual with breakfast', 'daily', 'recheck labs');
+  add('Omega-3 (EPA/DHA)', 'morning', 'With breakfast · Jamieson Extra Strength');
+  add('Creatine 5g', 'morning', 'Daily with breakfast');
+  add('Magnesium', 'morning', 'Morning with breakfast', 'daily', '≥2h from evening minocycline');
   add('Morning protein', 'morning', 'Eggs + Greek yogurt · ~35g');
 
   // ─── AFTERNOON (block: midday) ───
@@ -326,12 +282,12 @@ function buildProgramHabits(program = SAMERTH_PROGRAM) {
   add('English conversation / accent practice', 'midday', '30 min with Communication Bot · 12:00–12:30 PT', 'daily');
 
   // ─── PRE-GYM / PHYSIO (block: physio) ───
-  add('Pain block (~18 min)', 'physio', 'Right hip & knee — MANDATORY before lifting', 'gym_days');
-  add('Mon: Upper Push', 'physio', 'After pain block', 'mon_only');
-  add('Tue: Lower Quad', 'physio', 'After pain block · right leg first', 'tue_only');
-  add('Thu: Upper Pull', 'physio', 'After pain block', 'thu_only');
-  add('Fri: Lower Ham', 'physio', 'After pain block · right leg first', 'fri_only');
-  add('Wed: Home Pain Block', 'physio', '~25 min corrective · no gym', 'wed_only');
+  add('Short pain block (~12 min)', 'physio', 'Right hip & knee — MANDATORY before lifting', 'gym_days');
+  add('Mon: Upper Push', 'physio', 'After pain block · 4 lifts', 'mon_only');
+  add('Tue: Lower Quad', 'physio', 'After pain block · right leg first · 3 lifts', 'tue_only');
+  add('Thu: Upper Pull', 'physio', 'After pain block · 4 lifts', 'thu_only');
+  add('Fri: Lower Ham', 'physio', 'After pain block · right leg first · 3 lifts', 'fri_only');
+  add('Wed: Home Pain Block', 'physio', '~12 min corrective · no gym', 'wed_only');
 
   // ─── EVENING (block: evening) ───
   add('Face wash PM', 'evening', 'Evening cleanse');
@@ -340,7 +296,7 @@ function buildProgramHabits(program = SAMERTH_PROGRAM) {
   add('Minoxidil 5% foam', 'evening', 'Temples/hair');
   add('Minocycline (oral antibiotic)', 'evening', 'With dinner', 'daily', '', 'rx');
   add('Evening protein', 'evening', 'Cottage cheese or shake · ~25g');
-  add('Zinc', 'evening', 'Optional', '3x_week');
+  add('Zinc bisglycinate 50 mg', 'evening', '≥2h after minocycline · Webber', '3x_week', 'not for indefinite daily use');
   add('Nizoral (ketoconazole 1%)', 'evening', 'Scalp+beard · leave 3-5 min', '3x_week');
 
   // ─── WEEKEND (block: morning) ───
