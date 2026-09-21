@@ -1,7 +1,7 @@
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://ygqfhuuomdunetpvwhrj.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlncWZodXVvbWR1bmV0cHZ3aHJqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNDY5NjgsImV4cCI6MjA5NTgyMjk2OH0.X-yHD2uC1ua1troWyNEOmUobFVyhbbXyNmL_oBhL1A0';
-const DEFAULT_START = '2026-06-01'; // Day 1
+const DEFAULT_START = '2026-09-21'; // Day 0
 
 // ─── SUPABASE CLIENT ───────────────────────────────────────────────────────────
 const { createClient } = supabase;
@@ -143,11 +143,14 @@ async function initAppStore() {
   }
 
   useKg = appStore.settings.useKg !== false;
+  let needsHabitReset = false;
   if ((appStore.settings.programVersion || 0) < PROGRAM_VERSION) {
-    applyProgramSeed(true);
+    const seedResult = applyProgramSeed(true);
+    needsHabitReset = (seedResult === 'reset');
     await saveStoreKey('settings', appStore.settings);
   }
   gymConfig = loadGymConfig();
+  window._needsHabitReset = needsHabitReset;
 
   const cachedPhotos = readLocalJson('store-photos', null);
   if (cachedPhotos) {
@@ -288,11 +291,35 @@ function applyProgramSeed(force = false) {
   appStore.settings.profile = { ...SAMERTH_PROGRAM.user };
   appStore.settings.gymConfig = buildGymConfigFromProgram(SAMERTH_PROGRAM);
   localStorage.setItem('gymConfig', JSON.stringify(appStore.settings.gymConfig));
-  return true;
+  if (force) {
+    appStore.settings.startDate = DEFAULT_START;
+    localStorage.setItem('startDate', DEFAULT_START);
+  }
+  return force ? 'reset' : true;
 }
 
 async function seedProgramHabitsIfEmpty() {
   if (habits.length > 0) return;
+  const seed = buildProgramHabits(SAMERTH_PROGRAM);
+  for (const h of seed) {
+    try {
+      await api('habits', 'POST', h);
+    } catch (e) {
+      console.error('seed habit', h.label, e);
+    }
+  }
+  await loadHabits();
+}
+
+async function resetHabitsToProgram() {
+  for (const h of habits) {
+    try {
+      await removeHabitFromDb(h.id);
+    } catch (e) {
+      console.error('delete habit', h.label, e);
+    }
+  }
+  habits = [];
   const seed = buildProgramHabits(SAMERTH_PROGRAM);
   for (const h of seed) {
     try {
@@ -657,13 +684,13 @@ function dayNumber() {
   const start = new Date(y, m - 1, d);
   const todayMidnight = new Date();
   todayMidnight.setHours(0, 0, 0, 0);
-  return Math.floor((todayMidnight - start) / 86400000) + 1; // negative = future
+  return Math.floor((todayMidnight - start) / 86400000); // 0 on start date
 }
 
 function dayLabel() {
   const n = dayNumber();
-  if (n < 1) return `Starts in ${1 - n} day${1 - n === 1 ? '' : 's'}`;
-  return `Day ${n}/30`;
+  if (n < 0) return `Starts in ${-n} day${-n === 1 ? '' : 's'}`;
+  return `Day ${n}`;
 }
 
 function dayOfWeek() { return new Date().getDay(); } // 0=Sun
@@ -772,7 +799,12 @@ async function init() {
   setupDayRollover();
   if (isWaterCacheStale()) resetWaterForNewDay(today());
   await loadHabits();
-  await seedProgramHabitsIfEmpty();
+  if (window._needsHabitReset) {
+    await resetHabitsToProgram();
+    delete window._needsHabitReset;
+  } else {
+    await seedProgramHabitsIfEmpty();
+  }
   await loadTodayLogs({ freshDay: isNewCalendarDay() });
   renderToday();
   setupNav();
@@ -2437,7 +2469,7 @@ function drawMultiLineChart(id, rows, series) {
 function renderWelcomeBack() {
   const wb = document.getElementById('welcome-back');
   const d = progressData;
-  if (dayNumber() < 2) {
+  if (dayNumber() < 1) {
     wb.style.display = 'none';
     return;
   }
@@ -2800,6 +2832,33 @@ function renderHabitsPanel(container) {
     addBlockBtn.addEventListener('click', () => openEditHabit(null, blockId));
     container.appendChild(addBlockBtn);
   });
+
+  const resetBtn = document.createElement('button');
+  resetBtn.type = 'button';
+  resetBtn.className = 'add-habit-btn';
+  resetBtn.style.cssText = 'margin-top:20px;background:#f5f5f5;color:#666;border:1px solid #ddd;';
+  resetBtn.innerHTML = `<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10a7 7 0 1 1 1.5 4.3"/><polyline points="3 14 3 10 7 10"/></svg> Reset habits to current program`;
+  resetBtn.addEventListener('click', async () => {
+    if (!confirm('This will delete all your current habits and replace them with the default program habits. Continue?')) return;
+    resetBtn.disabled = true;
+    resetBtn.textContent = 'Resetting...';
+    try {
+      appStore.settings.startDate = DEFAULT_START;
+      localStorage.setItem('startDate', DEFAULT_START);
+      await saveStoreKey('settings', appStore.settings);
+      await resetHabitsToProgram();
+      renderToday();
+      renderHabitsPanel(container);
+      updateHeaderDay();
+      showToast('Habits reset to program defaults');
+    } catch (e) {
+      console.error('resetHabits', e);
+      showToast('Error resetting habits');
+      resetBtn.disabled = false;
+      resetBtn.innerHTML = `<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10a7 7 0 1 1 1.5 4.3"/><polyline points="3 14 3 10 7 10"/></svg> Reset habits to current program`;
+    }
+  });
+  container.appendChild(resetBtn);
 }
 
 async function removeHabitFromDb(habitId) {

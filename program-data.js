@@ -1,6 +1,6 @@
 // Samerth Training Program — source of truth for gym plan, habits, and reference data
 // PRIMARY GOAL: Fix right hip and knee pain. Recomp is secondary.
-const PROGRAM_VERSION = 4;
+const PROGRAM_VERSION = 5;
 
 const DAY_NAME_TO_DOW = {
   Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
