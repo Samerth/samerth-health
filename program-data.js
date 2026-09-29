@@ -1,6 +1,7 @@
 // Samerth Training Program — source of truth for gym plan, habits, and reference data
 // PRIMARY GOAL: Fix right hip and knee pain. Recomp is secondary.
-const PROGRAM_VERSION = 6;
+// THEORY: Left AIC-BC pattern (PRI) — testing with physio Jacky. Mixed approach: old pain block (de-emphasized) + new AIC-BC work.
+const PROGRAM_VERSION = 7;
 
 const DAY_NAME_TO_DOW = {
   Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
@@ -28,18 +29,27 @@ const SAMERTH_PROGRAM = {
   sessions: [
     {
       id: 'pain_block',
-      name: 'Short Pain Block',
+      name: 'Mixed Daily Lead-In',
       type: 'pain_block',
-      duration_min: 12,
-      note: 'MANDATORY before every gym session. Short but essential — do not skip.',
+      duration_min: 17,
+      note: 'MANDATORY before every gym session (~15-17 min). Block A: old pain block (de-emphasized). Block B: left AIC-BC work. Working theory — confirm approach with physio (Jacky).',
       exercises: [
-        { name: 'Right Hip Flexor Stretch', sets: 2, reps: null, duration_seconds: 40, weight_kg: 0, side: 'RIGHT', cue: 'Kneeling lunge, right knee down, tuck pelvis, push hips forward gently' },
-        { name: 'Right QL Stretch', sets: 2, reps: null, duration_seconds: 40, weight_kg: 0, side: 'RIGHT', cue: 'Stand, reach left arm overhead and bend left, feel right side stretch' },
-        { name: 'Banded Clamshells', sets: 2, reps: 12, duration_seconds: null, weight_kg: 0, side: 'RIGHT first', cue: 'Right side first. Slow, hold at top 2s, don\'t let pelvis rock back.' },
-        { name: 'Single-Leg Glute Bridge', sets: 2, reps: 10, duration_seconds: null, weight_kg: 0, side: 'RIGHT only', cue: 'Drive through right heel, squeeze right glute hard at top. This is key.' },
-        { name: 'Dead Bug', sets: 2, reps: 6, duration_seconds: null, weight_kg: 0, side: 'each side', cue: 'Exhale fully before moving, lower back flat on floor throughout. Slow.' },
-        { name: 'Banded TKE', sets: 2, reps: 12, duration_seconds: null, weight_kg: 0, side: 'RIGHT', cue: 'Band behind right knee, squeeze quad to full lock. Hold 1s. Knee rehab priority.' },
+        // ─── BLOCK A: Right-side pain block, de-emphasized (~5 min) ───
+        { name: 'R Half-Kneeling Hip Flexor Stretch', sets: 1, reps: null, duration_seconds: 30, weight_kg: 0, side: 'RIGHT', phase: 'Block A', cue: 'Kneeling lunge, right knee down, tuck pelvis, push hips forward gently' },
+        { name: 'R QL Stretch', sets: 1, reps: null, duration_seconds: 30, weight_kg: 0, side: 'RIGHT', phase: 'Block A', cue: 'Stand, reach left arm overhead and bend left, feel right side stretch' },
+        { name: 'Banded Clamshells', sets: 1, reps: 12, duration_seconds: null, weight_kg: 0, side: 'R then L', phase: 'Block A', cue: 'Right side first, then left (equal). Slow, hold at top 2s, don\'t let pelvis rock back.' },
+        { name: 'Single-Leg Glute Bridge', sets: 1, reps: 8, duration_seconds: null, weight_kg: 0, side: 'R then L', phase: 'Block A', cue: 'Right side first, then left (equal). Drive through heel, squeeze glute hard at top.' },
+        { name: 'Dead Bug', sets: 2, reps: 6, duration_seconds: null, weight_kg: 0, side: 'each side', phase: 'Block A', cue: 'Exhale fully before moving, lower back flat on floor throughout. Slow.' },
+        { name: 'Banded TKE', sets: 1, reps: 12, duration_seconds: null, weight_kg: 0, side: 'RIGHT', phase: 'Block A', cue: 'Band behind right knee, squeeze quad to full lock. Hold 1s. Knee rehab.' },
+        // ─── BLOCK B: Left AIC-BC work (~10 min) ───
+        { name: '90/90 Supine Breathing (Wall)', sets: 3, reps: 5, duration_seconds: null, weight_kg: 0, side: 'RIGHT ribs', phase: 'Block B', cue: 'Feet on wall/bench. Slow nasal inhale into RIGHT lower/back ribs, full long exhale. 5 breaths × 3 sets.' },
+        { name: 'Left Hip IR Mobility', sets: 2, reps: 8, duration_seconds: null, weight_kg: 0, side: 'LEFT', phase: 'Block B', cue: '90/90 left hip IR lift-offs OR seated/prone left hip IR rocks. Feel left hip rotate inward.' },
+        { name: 'L Heel-Elevated Hamstring Bridge', sets: 2, reps: 8, duration_seconds: null, weight_kg: 0, side: 'LEFT', phase: 'Block B', cue: 'Supine, heel on step/block. Drive through left heel, feel left hamstring engage. Or slider curl.' },
+        { name: 'L Single-Leg Glute Bridge (Ribs Down)', sets: 2, reps: 8, duration_seconds: null, weight_kg: 0, side: 'LEFT', phase: 'Block B', cue: 'Keep ribs down (exhale at top), squeeze left glute. Feel pelvis stay level.' },
+        { name: 'Wall 90/90 Hip Lift', sets: 2, reps: 5, duration_seconds: null, weight_kg: 0, side: 'BOTH', phase: 'Block B', cue: 'Wall-supported. Posterior pelvic tilt on exhale. 5 breaths × 2 sets. Flatten low back to floor.' },
+        { name: 'Standing Pelvic Centering', sets: 1, reps: 5, duration_seconds: null, weight_kg: 0, side: 'BOTH', phase: 'Block B', cue: 'Mirror. Ribs stacked over pelvis, weight equal both feet, slight shift toward RIGHT foot. 5 slow exhales.' },
       ],
+      aic_bc_note: 'AIC-BC theory: reduce/skip right-biased side plank & right suitcase carries. Use neutral carries (goblet/front-rack/two-handed) or LEFT-hand suitcase. Side planks equal both sides and short (or skip).',
     },
     {
       id: 'upper_push',
@@ -47,7 +57,7 @@ const SAMERTH_PROGRAM = {
       day: 'Monday',
       type: 'main',
       pain_block_id: 'pain_block',
-      session_note: 'Short pain block MANDATORY (~12 min). Stop if right hip/knee >4/10. No OHP/dips.',
+      session_note: 'Mixed lead-in MANDATORY (~15-17 min). Stop if right hip/knee >4/10. No OHP/dips. AIC-BC note: prefer neutral carries.',
       exercises: [
         { name: 'Incline DB Press', sets: 3, reps: 10, weight_kg: null, cue: 'Chin tucked, shoulders back and down. Control descent.' },
         { name: 'Landmine Press', sets: 3, reps: 10, weight_kg: null, side: 'each side', cue: 'Shoulder safe pressing. Control the descent.' },
@@ -61,7 +71,7 @@ const SAMERTH_PROGRAM = {
       day: 'Tuesday',
       type: 'main',
       pain_block_id: 'pain_block',
-      session_note: 'Short pain block MANDATORY (~12 min). RIGHT leg first. Stop if right hip/knee >4/10. Swap to leg press if squats aggravate knee.',
+      session_note: 'Mixed lead-in MANDATORY (~15-17 min). RIGHT leg first. Stop if right hip/knee >4/10. Swap to leg press if squats aggravate knee.',
       exercises: [
         { name: 'Goblet Squat OR Leg Press', sets: 3, reps: 10, weight_kg: null, cue: 'Watch right hip in mirror. Depth to comfort. Use leg press if knee angry.' },
         { name: 'Bulgarian Split Squat', sets: 3, reps: 8, weight_kg: null, side: 'each side', cue: 'RIGHT leg first. Short ROM. Skip if knee >3/10.' },
@@ -70,19 +80,28 @@ const SAMERTH_PROGRAM = {
     },
     {
       id: 'home_pain_block',
-      name: 'Home Pain Block',
+      name: 'Home Corrective (Block A + B)',
       day: 'Wednesday',
       type: 'pain_block',
-      duration_min: 12,
-      session_note: 'Same 6-move short pain block. No gym. Focus on right hip/knee rehab.',
+      duration_min: 17,
+      session_note: 'Mixed lead-in only — no lifts. Block A: old pain block (de-emphasized). Block B: left AIC-BC work. Working theory — confirm with physio (Jacky).',
       exercises: [
-        { name: 'Right Hip Flexor Stretch', sets: 2, reps: null, duration_seconds: 40, weight_kg: 0, side: 'RIGHT', cue: 'Kneeling lunge, right knee down, tuck pelvis, push hips forward' },
-        { name: 'Right QL Stretch', sets: 2, reps: null, duration_seconds: 40, weight_kg: 0, side: 'RIGHT', cue: 'Stand, reach left arm overhead and bend left, feel right side stretch' },
-        { name: 'Banded Clamshells', sets: 2, reps: 12, weight_kg: 0, side: 'RIGHT first', cue: 'Slow, hold at top 2s' },
-        { name: 'Single-Leg Glute Bridge', sets: 2, reps: 10, weight_kg: 0, side: 'RIGHT only', cue: 'Drive through right heel, squeeze right glute at top' },
-        { name: 'Dead Bug', sets: 2, reps: 6, weight_kg: 0, side: 'each side', cue: 'Back flat, exhale fully. Slow and controlled.' },
-        { name: 'Banded TKE', sets: 2, reps: 12, weight_kg: 0, side: 'RIGHT', cue: 'Band behind right knee, squeeze quad to full lock' },
+        // ─── BLOCK A: Right-side pain block, de-emphasized (~5 min) ───
+        { name: 'R Half-Kneeling Hip Flexor Stretch', sets: 1, reps: null, duration_seconds: 30, weight_kg: 0, side: 'RIGHT', phase: 'Block A', cue: 'Kneeling lunge, right knee down, tuck pelvis, push hips forward gently' },
+        { name: 'R QL Stretch', sets: 1, reps: null, duration_seconds: 30, weight_kg: 0, side: 'RIGHT', phase: 'Block A', cue: 'Stand, reach left arm overhead and bend left, feel right side stretch' },
+        { name: 'Banded Clamshells', sets: 1, reps: 12, duration_seconds: null, weight_kg: 0, side: 'R then L', phase: 'Block A', cue: 'Right side first, then left (equal). Slow, hold at top 2s, don\'t let pelvis rock back.' },
+        { name: 'Single-Leg Glute Bridge', sets: 1, reps: 8, duration_seconds: null, weight_kg: 0, side: 'R then L', phase: 'Block A', cue: 'Right side first, then left (equal). Drive through heel, squeeze glute hard at top.' },
+        { name: 'Dead Bug', sets: 2, reps: 6, duration_seconds: null, weight_kg: 0, side: 'each side', phase: 'Block A', cue: 'Exhale fully before moving, lower back flat on floor throughout. Slow.' },
+        { name: 'Banded TKE', sets: 1, reps: 12, duration_seconds: null, weight_kg: 0, side: 'RIGHT', phase: 'Block A', cue: 'Band behind right knee, squeeze quad to full lock. Hold 1s. Knee rehab.' },
+        // ─── BLOCK B: Left AIC-BC work (~10 min) ───
+        { name: '90/90 Supine Breathing (Wall)', sets: 3, reps: 5, duration_seconds: null, weight_kg: 0, side: 'RIGHT ribs', phase: 'Block B', cue: 'Feet on wall/bench. Slow nasal inhale into RIGHT lower/back ribs, full long exhale. 5 breaths × 3 sets.' },
+        { name: 'Left Hip IR Mobility', sets: 2, reps: 8, duration_seconds: null, weight_kg: 0, side: 'LEFT', phase: 'Block B', cue: '90/90 left hip IR lift-offs OR seated/prone left hip IR rocks. Feel left hip rotate inward.' },
+        { name: 'L Heel-Elevated Hamstring Bridge', sets: 2, reps: 8, duration_seconds: null, weight_kg: 0, side: 'LEFT', phase: 'Block B', cue: 'Supine, heel on step/block. Drive through left heel, feel left hamstring engage. Or slider curl.' },
+        { name: 'L Single-Leg Glute Bridge (Ribs Down)', sets: 2, reps: 8, duration_seconds: null, weight_kg: 0, side: 'LEFT', phase: 'Block B', cue: 'Keep ribs down (exhale at top), squeeze left glute. Feel pelvis stay level.' },
+        { name: 'Wall 90/90 Hip Lift', sets: 2, reps: 5, duration_seconds: null, weight_kg: 0, side: 'BOTH', phase: 'Block B', cue: 'Wall-supported. Posterior pelvic tilt on exhale. 5 breaths × 2 sets. Flatten low back to floor.' },
+        { name: 'Standing Pelvic Centering', sets: 1, reps: 5, duration_seconds: null, weight_kg: 0, side: 'BOTH', phase: 'Block B', cue: 'Mirror. Ribs stacked over pelvis, weight equal both feet, slight shift toward RIGHT foot. 5 slow exhales.' },
       ],
+      aic_bc_note: 'AIC-BC theory: reduce/skip right-biased side plank & right suitcase carries. Use neutral carries (goblet/front-rack/two-handed) or LEFT-hand suitcase. Side planks equal both sides and short (or skip).',
     },
     {
       id: 'upper_pull',
@@ -90,7 +109,7 @@ const SAMERTH_PROGRAM = {
       day: 'Thursday',
       type: 'main',
       pain_block_id: 'pain_block',
-      session_note: 'Short pain block MANDATORY (~12 min). Stop if right hip/knee >4/10.',
+      session_note: 'Mixed lead-in MANDATORY (~15-17 min). Stop if right hip/knee >4/10.',
       exercises: [
         { name: 'Seated Cable Row', sets: 3, reps: 10, weight_kg: null, cue: 'Pause 2s at chest. Chin tucked, shoulder blades squeeze.' },
         { name: 'Lat Pulldown', sets: 3, reps: 10, weight_kg: null, cue: 'Pull elbows down equally. Don\'t let right shoulder elevate.' },
@@ -104,7 +123,7 @@ const SAMERTH_PROGRAM = {
       day: 'Friday',
       type: 'main',
       pain_block_id: 'pain_block',
-      session_note: 'Short pain block MANDATORY (~12 min). RIGHT leg first. Stop if right hip/knee >4/10.',
+      session_note: 'Mixed lead-in MANDATORY (~15-17 min). RIGHT leg first. Stop if right hip/knee >4/10.',
       exercises: [
         { name: 'Hip Thrust', sets: 3, reps: 10, weight_kg: null, cue: 'Both heels drive equally. Watch for right hip hiking. Squeeze glutes at top.' },
         { name: 'Seated Leg Curl', sets: 3, reps: 12, weight_kg: null, cue: 'Full range, slow eccentric, squeeze at top. Knee-friendly.' },
@@ -207,11 +226,16 @@ function buildGymConfigFromProgram(program = SAMERTH_PROGRAM) {
   const painBlockSession = sessionsById.pain_block;
 
   const warmup = {
-    note: 'MANDATORY: Short pain block (~12 min) first. Posture via Face Pulls + chin cues. Stop lifts if right hip/knee >4/10.',
+    note: painBlockSession?.note || 'MANDATORY: Mixed lead-in (~15-17 min) first. Block A: old pain block (de-emphasized). Block B: left AIC-BC work. Stop lifts if right hip/knee >4/10.',
+    aic_bc_note: painBlockSession?.aic_bc_note,
     phases: [
       {
-        name: painBlockSession?.name || 'Short Pain Block',
-        exercises: (painBlockSession?.exercises || []).map(mapProgramExercise),
+        name: 'Block A — Right-Side Pain Block',
+        exercises: (painBlockSession?.exercises || []).filter(ex => ex.phase === 'Block A').map(mapProgramExercise),
+      },
+      {
+        name: 'Block B — Left AIC-BC Work',
+        exercises: (painBlockSession?.exercises || []).filter(ex => ex.phase === 'Block B').map(mapProgramExercise),
       },
     ],
   };
@@ -282,12 +306,12 @@ function buildProgramHabits(program = SAMERTH_PROGRAM) {
   add('English conversation / accent practice', 'midday', '30 min with Communication Bot · 12:00–12:30 PT', 'daily');
 
   // ─── PRE-GYM / PHYSIO (block: physio) ───
-  add('Short pain block (~12 min)', 'physio', 'Right hip & knee — MANDATORY before lifting', 'gym_days');
-  add('Mon: Upper Push', 'physio', 'After pain block · 4 lifts', 'mon_only');
-  add('Tue: Lower Quad', 'physio', 'After pain block · right leg first · 3 lifts', 'tue_only');
-  add('Thu: Upper Pull', 'physio', 'After pain block · 4 lifts', 'thu_only');
-  add('Fri: Lower Ham', 'physio', 'After pain block · right leg first · 3 lifts', 'fri_only');
-  add('Wed: Home Pain Block', 'physio', '~12 min corrective · no gym', 'wed_only');
+  add('Mixed lead-in (~15-17 min)', 'physio', 'Block A (old pain block) + Block B (AIC-BC) — MANDATORY before lifting', 'gym_days', 'Working theory: left AIC-BC pattern. Confirm with physio (Jacky).');
+  add('Mon: Upper Push', 'physio', 'After lead-in · 4 lifts · prefer neutral carries', 'mon_only');
+  add('Tue: Lower Quad', 'physio', 'After lead-in · right leg first · 3 lifts', 'tue_only');
+  add('Thu: Upper Pull', 'physio', 'After lead-in · 4 lifts', 'thu_only');
+  add('Fri: Lower Ham', 'physio', 'After lead-in · right leg first · 3 lifts', 'fri_only');
+  add('Wed: Home Corrective', 'physio', 'Block A + B only (~15-17 min) · no lifts', 'wed_only', 'Working theory: left AIC-BC pattern. Confirm with physio (Jacky).');
 
   // ─── EVENING (block: evening) ───
   add('Face wash PM', 'evening', 'Evening cleanse');
